@@ -108,8 +108,8 @@ completions still work.*
   away, with the API key injected on every request so it is authorised even when
   a password is set
 - That page is restyled to the same design as the dashboard — same surfaces,
-  ink, accent, radii and type, in both light and dark — so it reads as part of
-  this application rather than as a second program in a frame. Every control
+  ink, accent, radii and type — so it reads as part of this application rather
+  than as a second program in a frame. Every control
   that remains behaves exactly as it did; the one thing removed is the Help
   menu, which was upstream links and an upstream About dialog from top to bottom
 - The folder dialog's path field gets a Browse button that opens the system's
