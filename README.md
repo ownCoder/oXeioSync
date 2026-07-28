@@ -17,9 +17,30 @@ code talks to; the application's own interface deliberately does not — see*
 
 [![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
-![tests](https://img.shields.io/badge/tests-207-brightgreen)
+![tests](https://img.shields.io/badge/tests-244-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 [![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
+
+## Download
+
+[![Download for Windows](https://img.shields.io/badge/Download%20for%20Windows-oXeioSync--setup.exe-2a78d6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/ownCoder/oXeioSync/releases/latest/download/oXeioSync-setup.exe)
+
+Windows 10 or later, 64-bit. That link always resolves to the newest release, so
+it does not go stale between versions;
+[every release](https://github.com/ownCoder/oXeioSync/releases) is listed with
+its notes and the installer's SHA-256.
+
+Installs per user, so there is no administrator prompt, and **nothing else is
+needed** — the sync engine ships inside the installer, so a machine with no
+Python, no Syncthing and no working route to GitHub is enough. Roughly ten
+seconds, into `%LOCALAPPDATA%\Programs\oXeioSync`.
+
+It is not code-signed, so SmartScreen warns the first time: *More info* →
+*Run anyway*. Check what you downloaded first if you would rather:
+
+```powershell
+Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
+```
 
 ## Screenshots
 
@@ -141,28 +162,23 @@ Compared to SyncTrayzor, still missing:
 
 ## Requirements
 
-**To use it:** nothing. The installer carries everything, including the Python
-runtime; the sync engine is fetched on first run, with your agreement.
+**To use it:** nothing, and no network. The installer carries everything — the
+Python runtime and the sync engine both — so a machine that has just been set up
+and has never seen either is enough.
 
-**To run from source or build it:** Python 3.11 or newer. The engine is still
-downloaded at runtime, so no separate install of it is needed.
+**To run from source or build it:** Python 3.11 or newer. A build fetches the
+engine once into `build/vendor/` and bundles it from there; running from source
+without doing that falls back to offering the download on first run.
 
 ## Running it
 
 ### The short way
 
-Download `oXeioSync-setup.exe` from
-[the latest release](https://github.com/ownCoder/oXeioSync/releases/latest) and
-run it — per-user, no administrator prompt, about ten seconds. It lands in
-`%LOCALAPPDATA%\Programs\oXeioSync` with a Start Menu entry.
-
-The installer is not code-signed, so SmartScreen warns the first time it runs:
-*More info* → *Run anyway*. Each release publishes the installer's SHA-256, so
-the download can be checked against it first:
-
-```powershell
-Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
-```
+[Download the installer](https://github.com/ownCoder/oXeioSync/releases/latest/download/oXeioSync-setup.exe)
+and run it — per-user, no administrator prompt, about ten seconds. It lands in
+`%LOCALAPPDATA%\Programs\oXeioSync` with a Start Menu entry, and starts syncing
+without fetching anything. See [Download](#download) above for the SmartScreen
+note and how to check the file's digest.
 
 To build one yourself instead, see
 [Building the installer](#building-the-installer) below.
