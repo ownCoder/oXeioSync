@@ -19,6 +19,24 @@ code talks to; the application's own interface deliberately does not — see*
 ![tests](https://img.shields.io/badge/tests-207-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
 
+## Screenshots
+
+![The dashboard](docs/screenshots/dashboard.png)
+
+*The dashboard: live throughput on a shared axis, a progress meter per folder,
+and the engine's own memory use. Sample folders on a scratch profile.*
+
+![The configuration page](docs/screenshots/configuration.png)
+
+*The engine's configuration page, embedded and restyled to the same design —
+same surfaces, ink, accent and type as the dashboard.*
+
+![The folder dialog, with a Browse button beside the path field](docs/screenshots/add-folder.png)
+
+*The folder dialog, with the Browse button that opens the system's folder
+picker. The path field itself is untouched — typing and the page's own
+completions still work.*
+
 ## What works
 
 **Process supervision**
