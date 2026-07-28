@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Portable-mode data folder and the managed Syncthing binary
+data/
+
+# Per-machine tool settings, not part of the project
+.claude/settings.local.json

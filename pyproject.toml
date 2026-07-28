@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxeiosync"
+version = "0.1.0"
+description = "A tray application that hosts and wraps Syncthing, making it behave like a native desktop app."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "PySide6>=6.6",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.gui-scripts]
+oxeiosync = "oxeiosync.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["oxeiosync*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Stated explicitly so that a bare `ruff check` is the check this project means.
+# Without it ruff applies its own defaults, which flag ~50 things nobody here
+# opted into and drown the ones that matter.
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes — the ones that are actually bugs
+    "W",    # warnings
+    "I",    # import order
+    "UP",   # outdated idioms
+    "B",    # likely bugs
+    "SIM",  # needless complexity
+    "N",    # naming
+]
+ignore = [
+    # Qt's API is camelCase and overriding it is the whole point of a subclass.
+    "N802",  # function name should be lowercase
+    "N803",  # argument name should be lowercase
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Spec and entry scripts run under PyInstaller, which injects globals.
+"packaging/*.py" = ["F821"]
+# Contains a verbatim sha256sum listing; its lines are 64 hex characters plus a
+# filename by definition, and reflowing it would stop it being a realistic
+# fixture.
+"tests/test_binary.py" = ["E501"]
