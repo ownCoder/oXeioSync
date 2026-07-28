@@ -209,6 +209,23 @@ class MainWindow(QMainWindow):
         from .. import paths
 
         engine_version = self._state.snapshot.version or "not connected"
+
+        # The engine ships with the application, which makes its licence terms
+        # something this application distributes rather than merely points at.
+        # Say where they are — but only when they are actually there, since a
+        # build made without an engine downloads one instead. The install folder
+        # is looked at first because the installer lifts a copy up to it; the
+        # bundle's own directory is where they are otherwise.
+        folders = (paths.install_dir(), *(p.parent for p in paths.bundled_syncthing_candidates()))
+        notice = next(
+            (d for d in folders if (d / paths.ENGINE_NOTICE_NAME).is_file()), None
+        )
+        provenance = (
+            f"<br>Its licence and source notice are in {notice}."
+            if notice is not None
+            else ""
+        )
+
         QMessageBox.about(
             self,
             f"About {APP_NAME}",
@@ -220,7 +237,7 @@ class MainWindow(QMainWindow):
             # Attribution belongs somewhere, and About is where people look for
             # it. It is the only place the upstream project is named.
             "<p style='color:#898781'>Syncing is powered by Syncthing "
-            "(MPL-2.0), downloaded separately and not modified.</p>",
+            f"(MPL-2.0), used unmodified.{provenance}</p>",
         )
 
     # ------------------------------------------------------------- window events

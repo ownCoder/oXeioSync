@@ -25,6 +25,12 @@ from . import APP_NAME
 PORTABLE_MARKER = "portable"
 PORTABLE_DATA_DIRNAME = "data"
 
+#: Written next to a shipped engine by ``tools/fetch_engine.py``: which version
+#: it is, its digest, and where its source can be had. Named here because the
+#: application points people at it, and a filename nobody agrees on is a file
+#: nobody finds.
+ENGINE_NOTICE_NAME = "ENGINE-NOTICE.txt"
+
 
 def is_frozen() -> bool:
     """True when running from a PyInstaller-style bundle rather than source."""
@@ -87,9 +93,27 @@ def managed_syncthing_path() -> Path:
     return binary_dir() / syncthing_binary_name()
 
 
-def bundled_syncthing_path() -> Path:
-    """Path to a Syncthing binary shipped alongside the application, if any."""
-    return install_dir() / syncthing_binary_name()
+def bundled_syncthing_candidates() -> tuple[Path, ...]:
+    """Every place a shipped engine could be, best guess first.
+
+    The build ships one; exactly where it lands depends on the packager. A
+    frozen one-folder build keeps its payload in a private contents directory
+    (``_internal``) next to the executable, and PyInstaller reports that
+    directory as ``sys._MEIPASS``. Checking all three costs three stat calls
+    once at start-up and means a change in packaging layout cannot quietly turn
+    a standalone build back into one that wants the network on first run.
+    """
+    name = syncthing_binary_name()
+    root = install_dir()
+    candidates = [root / name, root / "_internal" / name]
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / name)
+
+    # dict.fromkeys: keep the order, drop the duplicate when _MEIPASS *is* the
+    # _internal directory, which is the usual case.
+    return tuple(dict.fromkeys(candidates))
 
 
 def ensure_dirs() -> None:

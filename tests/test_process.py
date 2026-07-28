@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from oxeiosync import paths
 from oxeiosync.config import Config
 from oxeiosync.syncthing import process as process_module
 from oxeiosync.syncthing.process import (
@@ -50,8 +51,8 @@ def test_shutdown_falls_back_to_config_before_a_first_launch(supervisor):
     assert api.api_key == "original-key"
 
 
-def test_gui_address_and_key_reach_syncthing_through_the_environment(supervisor):
-    env = supervisor._build_env()
+def test_gui_address_and_key_reach_syncthing_through_the_environment(supervisor, tmp_path):
+    env = supervisor._build_env(tmp_path / "syncthing.exe")
 
     assert env["STGUIADDRESS"] == "127.0.0.1:8384"
     assert env["STGUIAPIKEY"] == "original-key"
@@ -59,11 +60,30 @@ def test_gui_address_and_key_reach_syncthing_through_the_environment(supervisor)
     assert env["STNORESTART"] == "1"
 
 
-def test_empty_gui_address_does_not_become_an_empty_override(supervisor):
+def test_empty_gui_address_does_not_become_an_empty_override(supervisor, tmp_path):
     """An empty STGUIADDRESS would make Syncthing fall back to its config.xml."""
     supervisor._config.gui_address = ""
 
-    assert supervisor._build_env()["STGUIADDRESS"] != ""
+    assert supervisor._build_env(tmp_path / "syncthing.exe")["STGUIADDRESS"] != ""
+
+
+def test_a_managed_engine_may_still_upgrade_itself(supervisor, monkeypatch, tmp_path):
+    """The copy the app downloads lives where no installer will overwrite it."""
+    # The environment is inherited, so a build machine that happens to set this
+    # would make the assertion pass for the wrong reason — or fail for one.
+    monkeypatch.delenv("STNOUPGRADE", raising=False)
+
+    env = supervisor._build_env(tmp_path / "bin" / "syncthing.exe")
+
+    assert "STNOUPGRADE" not in env
+
+
+def test_the_shipped_engine_is_stopped_from_upgrading_itself(supervisor, monkeypatch, tmp_path):
+    """It sits in the program folder, which the next install replaces wholesale."""
+    shipped = tmp_path / "_internal" / "syncthing.exe"
+    monkeypatch.setattr(paths, "bundled_syncthing_candidates", lambda: (shipped,))
+
+    assert supervisor._build_env(shipped)["STNOUPGRADE"] == "1"
 
 
 def test_command_line_uses_only_long_lived_flags(supervisor, tmp_path):

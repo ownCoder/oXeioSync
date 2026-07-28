@@ -11,9 +11,16 @@ Nothing here is generated from the app's own data files, because it has none:
 the icons are painted with QPainter and the injected CSS/JS are string literals.
 The only asset is the .ico, and `tools/make_icon.py` renders that from the same
 drawing code the tray uses.
+
+One thing that is *not* the app's own is bundled all the same: the sync engine,
+vendored into `build/vendor/` by `tools/fetch_engine.py`. Shipping it is what
+makes the build installable on a machine that has no usable route to GitHub, and
+the build fails without one rather than quietly producing a bundle that needs
+the network on first run.
 """
 
 import os
+import sys
 from pathlib import Path
 
 # __file__ is not defined while a spec runs; PyInstaller provides SPECPATH.
@@ -67,6 +74,55 @@ VERSION_FILE.write_text(
 """,
     encoding="utf-8",
 )
+
+# --- the sync engine ---------------------------------------------------------
+# Imported rather than reimplemented: the mapping from this machine to a release
+# asset name lives in the application, and a build that guessed it differently
+# would vendor one engine and ship another.
+sys.path.insert(0, str(ROOT))
+from oxeiosync.syncthing.binary import platform_asset_infix  # noqa: E402
+
+ENGINE_ARCH = os.environ.get("OXEIOSYNC_ENGINE_ARCH") or platform_asset_infix()
+ENGINE_DIR = ROOT / "build" / "vendor" / ENGINE_ARCH
+ENGINE_NAME = "syncthing.exe" if ENGINE_ARCH.startswith("windows") else "syncthing"
+ENGINE = ENGINE_DIR / ENGINE_NAME
+
+# Shipping the engine means shipping its licence terms with it.
+ENGINE_LEGAL = (
+    "ENGINE-NOTICE.txt",
+    "LICENSE-engine.txt",
+    "NOTICE-engine.txt",
+    "AUTHORS-engine.txt",
+)
+
+# An escape hatch for working on the packaging itself, where waiting on a 30 MB
+# download to test a spec change is pure friction. Not for release builds: the
+# resulting bundle asks for the network on first run, which is the whole problem.
+ALLOW_NO_ENGINE = os.environ.get("OXEIOSYNC_ALLOW_NO_ENGINE") == "1"
+
+# Entries are (destination, source, typecode) — the shape `a.datas` holds after
+# Analysis has run, which is not the (source, destination) pair that
+# `Analysis(datas=...)` accepts. These are appended below rather than passed in,
+# so this is the shape that matters; the filter above reading `entry[0]` as a
+# destination is the same fact seen from the other side.
+engine_datas = []
+if ENGINE.is_file():
+    engine_datas.append((ENGINE_NAME, str(ENGINE), "DATA"))
+    engine_datas += [
+        (name, str(ENGINE_DIR / name), "DATA")
+        for name in ENGINE_LEGAL
+        if (ENGINE_DIR / name).is_file()
+    ]
+    print(f"spec: bundling the sync engine from {ENGINE}")
+elif ALLOW_NO_ENGINE:
+    print("spec: WARNING — building with no sync engine (OXEIOSYNC_ALLOW_NO_ENGINE=1)")
+else:
+    raise SystemExit(
+        f"No sync engine vendored for {ENGINE_ARCH}: expected {ENGINE}\n"
+        f"Run:  python tools/fetch_engine.py --arch {ENGINE_ARCH}\n"
+        "Or set OXEIOSYNC_ALLOW_NO_ENGINE=1 to build a bundle that downloads one "
+        "on first run."
+    )
 
 # --- what to leave out -------------------------------------------------------
 # Excluding a PySide6 *binding* module does not remove the Qt DLL behind it:
@@ -190,6 +246,15 @@ print(
     f"spec: dropped {_before_datas - len(a.datas)} data files and "
     f"{_before_binaries - len(a.binaries)} binaries"
 )
+
+# Appended here, after Analysis has run and after the drop filters, for two
+# reasons. A drop rule written for Qt's collected resources can never take the
+# engine out with it; and an entry added at this point is past the step that
+# reclassifies an MZ file handed to `Analysis(datas=...)` as a binary, so the
+# engine is copied verbatim rather than walked for imports and rewritten. It is
+# somebody else's executable and should arrive byte for byte as published —
+# which is also what its licence asks of anyone who redistributes it.
+a.datas += engine_datas
 
 pyz = PYZ(a.pure)  # noqa: F821
 

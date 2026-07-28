@@ -77,7 +77,9 @@ completions still work.*
 - A folder row per share: a progress meter, and beside it the state in words —
   a percentage, `paused`, or a count of errors
 - A memory chart for the engine itself, and a peer list with per-device rates
-- Light and dark are each a selected set of colours, not an automatic inversion
+- Light and dark are each a selected set of colours, not an automatic inversion,
+  and the application follows the one Windows is set to — including when that is
+  changed while it is running
 
 **Window**
 - The engine's own configuration screen is embedded via QtWebEngine one tab
@@ -100,8 +102,12 @@ completions still work.*
   close button quits instead
 
 **Other**
-- Downloads Syncthing itself on first run, verified against the SHA-256 digests
-  published with the release before it is installed or executed
+- Ships Syncthing inside the installer, so a fresh machine needs nothing else —
+  no download, no second installer, no working route to GitHub. The engine is
+  pinned and checked against the SHA-256 digests published with its release at
+  build time, and is shipped unmodified
+- Falls back to downloading one, verified the same way, for a build made
+  without a bundled engine or an installation whose engine has been removed
 - Start on login (Windows, per-user, no elevation)
 - Portable mode: keep everything in one relocatable folder
 - Single instance per data folder — launching a second copy raises the first
@@ -193,10 +199,17 @@ throughout.
 
 ### What happens on first run
 
-1. **It offers to download the sync engine.** No engine is bundled, so the first
-   launch asks whether to fetch one. It is verified against the SHA-256 digests
-   published with the release before anything is installed or executed, and it
-   lands in the data folder listed below — nothing is installed system-wide.
+1. **It starts the sync engine it came with.** The installer ships one, so there
+   is nothing to fetch and no dialog: the first launch goes straight to a
+   running engine, offline machines included.
+
+   A build made without one (`--no-engine`), or an installation whose engine has
+   been deleted, falls back to asking whether to download a copy. That copy is
+   verified against the SHA-256 digests published with the release before
+   anything is installed or executed, and lands in the data folder listed below.
+   The release list comes from GitHub, falling back to the engine project's own
+   metadata server when GitHub is unreachable or has rate-limited the address
+   you are calling from — which, on a shared or NATed connection, it will.
 2. **It picks a free port.** The usual port is 8384; if something already has it
    (another Syncthing, or SyncTrayzor) oXeioSync moves to the next free one and
    remembers the choice, rather than failing to start.
@@ -292,6 +305,17 @@ Some Linux desktops need an appindicator extension for tray icons. oXeioSync
 notices when no tray is available and shows the window instead, so it stays
 usable.
 
+**How do I turn dark mode on?**
+You don't — Windows does. **Settings → Personalisation → Colours → Choose your
+default app mode → Dark**, and oXeioSync follows, immediately, without a
+restart. There is deliberately no switch in the application: a second one that
+can disagree with the system is worse than none.
+
+The **Log** tab records what it decided at start-up (`Host colour scheme: dark`).
+If that says dark and the window is still light, the setting is being read but
+not applied — say so in an issue rather than looking for a hidden option, and
+include that line.
+
 **Starting over**
 Delete the data folder (below) and launch again — you get a fresh identity, a
 fresh database and a fresh config. Your actual files are never in there.
@@ -332,6 +356,8 @@ folders are independent and may run at the same time.
 | `docs/screenshots/` | The images used above |
 | `tests/` | Unit tests — no display or network needed |
 | `tests/test_naming.py` | Guards the rule that the interface never names the upstream project |
+| `tests/test_packaging.py` | Guards the promise that an installed copy carries its own engine |
+| `tools/fetch_engine.py` | Vendors the sync engine into `build/vendor/` for the bundle |
 | `tools/make_icon.py` | Renders the `.ico` from the app's own drawing code |
 | `tools/build_exe.py` | Builds the executable, and the installer with `--installer` |
 | `tools/smoke_exe.py` | Acceptance checks for the built executable |
@@ -398,9 +424,10 @@ and reaches the GUI as Qt signals. Nothing blocks the event loop.
 .venv\Scripts\python.exe tools\build_exe.py --clean --zip
 ```
 
-That regenerates the icon, runs PyInstaller against `packaging/oxeiosync.spec`,
-and leaves a self-contained folder in `dist\oXeioSync\` plus a zip beside it.
-The result needs no Python on the target machine. It is a **one-folder** build,
+That vendors the sync engine, regenerates the icon, runs PyInstaller against
+`packaging/oxeiosync.spec`, and leaves a self-contained folder in
+`dist\oXeioSync\` plus a zip beside it. The result needs no Python on the target
+machine, and no network either. It is a **one-folder** build,
 not a single file — QtWebEngine ships a helper executable and resource files it
 locates relative to the Qt installation, and one-file would re-extract ~300 MB to
 a temporary directory on every launch, including the launch that only wants to
@@ -417,6 +444,34 @@ here imports, and Qt's OpenSSL backend, which nothing here uses.
 embedded page falls back to on a virtual machine or a box with broken GPU
 drivers, and that is the failure mode hardest to diagnose from a distance.
 
+### The bundled engine
+
+`tools/fetch_engine.py` puts an engine in `build\vendor\<os>-<arch>\`, and the
+spec bundles it from there into `_internal\`. `build_exe.py` runs it for you; run
+it directly to pin a version or to vendor one on a machine that cannot reach
+GitHub:
+
+```bash
+.venv\Scripts\python.exe tools\fetch_engine.py --version v2.1.2
+```
+
+```bash
+.venv\Scripts\python.exe tools\fetch_engine.py --from-archive syncthing-windows-amd64-v2.1.2.zip --sha256 4626c1...
+```
+
+The download goes through the application's own code, digest check included —
+vendoring is not a second, laxer way to obtain a file that is about to be handed
+to every machine this installer reaches. The offline forms refuse a file with no
+digest to check it against unless you pass `--allow-unverified` and mean it.
+
+It writes an `engine.json` manifest beside the binary, so a second build reuses
+what is already there, and notices if the vendored file stops matching what the
+manifest says it is.
+
+Both the spec and the installer script **fail the build** when no engine is
+present, rather than quietly producing something that needs the network on first
+run. `--no-engine` opts out deliberately, and produces exactly that.
+
 Two build knobs:
 
 | | |
@@ -430,10 +485,12 @@ Check the result with:
 .venv\Scripts\python.exe tools\smoke_exe.py
 ```
 
-It runs the built exe against a throwaway data folder and asserts the things
-only a bundle can get wrong: that it starts, that it logs with no console
-attached, that the QtWebEngine helper and the sync engine both spawn, that a
-second launch defers to the first, and that shutting down leaves no orphans.
+It runs the built exe against a throwaway **empty** data folder and asserts the
+things only a bundle can get wrong: that the bundle carries an engine at all,
+that it starts, that it logs with no console attached, that the QtWebEngine
+helper and the sync engine both spawn, that a second launch defers to the first,
+and that shutting down leaves no orphans. Starting from empty is the point: a
+pass means the build reached a running engine on what it shipped with.
 
 ## Building the installer
 
@@ -587,6 +644,17 @@ Syncthing 2.x rejects unauthenticated REST calls, so knowing the key matters.
 dependency, crisp rendering at whatever size is asked for, exact control over the
 mark specs, and rotating the icon glyph gives the syncing animation for free.
 
+**Why the Fusion style, and only in the dark.** Every colour here is read back
+from the Qt palette, which is how the dashboard, the charts and the restyled
+configuration page agree with each other and with the window around them. On
+Windows that arrangement had a hole in it: Qt reports the host's colour scheme
+correctly — `colorScheme()` says `Dark` the moment Windows is set to dark — but
+the native style hands back a `#f0f0f0` window regardless, so the dark tokens
+were unreachable and the setting was honoured by nothing. Fusion does follow the
+scheme, so it is used when the host asks for dark, and only then; light keeps
+the native look it already had. The swap is undone if the host goes back to
+light, which it does on a schedule for anyone who has that turned on.
+
 **Why no processor-load chart?** The engine still reports a `cpuPercent` field,
 but current builds leave it at zero — measured here at 0 throughout a 400 MB
 hashing run. A chart pinned at zero looks broken rather than informative, so the
@@ -647,11 +715,26 @@ The command written for a checkout puts the project directory on `sys.path`
 explicitly. `pip install -e .` produces a tidier entry, and is preferred
 automatically when present.
 
-**Syncthing's own auto-upgrade is left enabled.** The managed binary lives in a
-user-writable directory, so Syncthing can update itself the way it normally
-would. Only the initial download goes through oXeioSync.
+**Syncthing's own auto-upgrade is left enabled — for the downloaded copy.** The
+managed binary lives in a user-writable directory that no installer touches, so
+Syncthing can update itself the way it normally would; only the initial download
+goes through oXeioSync. The *bundled* copy is launched with `STNOUPGRADE=1`,
+because it sits in the program folder, which the installer replaces wholesale on
+every update: an engine that upgraded itself there would be silently reverted by
+the next install, and the digest published in the notice beside it would stop
+describing the file it names.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). Syncthing itself is MPL-2.0 and is downloaded, not
-bundled.
+MIT — see [LICENSE](LICENSE).
+
+Syncthing itself is MPL-2.0. It is bundled with the installer, unmodified and
+byte-identical to the official release, and it stays under its own licence:
+MPL-2.0 is per-file copyleft, so nothing about it changes oXeioSync's terms.
+Every build ships the engine's own `LICENSE-engine.txt` and `AUTHORS-engine.txt`
+verbatim from its release archive, plus a generated `ENGINE-NOTICE.txt` naming
+the exact version, its SHA-256, and where to obtain the corresponding source —
+which is what redistributing an MPL-2.0 binary actually requires. They install
+to the top of the program folder.
+
+This is a description of how the project meets those terms, not legal advice.

@@ -20,7 +20,11 @@
 #define AppName "oXeioSync"
 #define AppExe "oXeioSync.exe"
 #define AppPublisher "oXeioSync"
-#define SourceDir "..\dist\oXeioSync"
+; Anchored to this script rather than left relative: the compile-time guards
+; below ask the preprocessor whether files exist, and that question has to be
+; answered against the payload, not against whatever directory ISCC was invoked
+; from. An absolute path is equally valid in [Files].
+#define SourceDir AddBackslash(SourcePath) + "..\dist\oXeioSync"
 
 ; Read the version straight from the built executable, so the installer can
 ; never claim a version the payload does not have. ProductVersion is the string
@@ -33,6 +37,18 @@
 ; folder an installer sweeps. Shipping one would also ship a device identity.
 #if DirExists(SourceDir + "\data") || FileExists(SourceDir + "\portable")
   #error The payload contains a "data" folder or a "portable" marker; remove it.
+#endif
+
+; Compile-time guard. The point of this installer is that the machine it lands
+; on needs nothing else — no download, no second installer, no working route to
+; GitHub. A payload with no engine in it still installs and still runs, so
+; nothing here would notice; the user finds out on first launch instead.
+; PyInstaller puts bundled payload in _internal; a hand-assembled folder may
+; have it beside the exe. Either satisfies the application's own lookup.
+#if !FileExists(SourceDir + "\_internal\syncthing.exe") && !FileExists(SourceDir + "\syncthing.exe")
+  #if GetEnv("OXEIOSYNC_ALLOW_NO_ENGINE") != "1"
+    #error No sync engine in the payload. Build with tools/build_exe.py, or set OXEIOSYNC_ALLOW_NO_ENGINE=1 to ship an installer that downloads one on first run.
+  #endif
 #endif
 
 [Setup]
@@ -92,6 +108,15 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 ; The whole one-folder build, including the _internal tree.
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; The engine's licence and source notice, lifted out of _internal to the top of
+; the install folder. They are already installed by the line above — nobody is
+; going to find them in a directory named after an implementation detail, and a
+; notice nobody can find does not do the job a notice exists to do.
+Source: "{#SourceDir}\_internal\ENGINE-NOTICE.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\_internal\LICENSE-engine.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\_internal\AUTHORS-engine.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\_internal\NOTICE-engine.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+
 [InstallDelete]
 ; PyInstaller's _internal tree changes shape between builds; clearing it stops
 ; a stale DLL from an older version being loaded in preference to the new one.
@@ -141,19 +166,56 @@ end;
   Killing by image name would reach an unrelated copy — a portable one on a USB
   stick, or a second installation in another folder — and take its sync engine
   down with it. }
+{ A path as a PowerShell single-quoted literal. Doubling the apostrophes is the
+  whole job, and skipping it is how "C:\Users\O'Brien\..." turns the command
+  below into a parse error that fails silently. }
+function PsQuote(const S: String): String;
+var
+  Escaped: String;
+begin
+  Escaped := S;
+  StringChange(Escaped, '''', '''''');
+  Result := '''' + Escaped + '''';
+end;
+
 procedure ForceStopThisInstall(const ExePath: String);
 var
-  Quote, Params: String;
+  AppDir, Params: String;
   ResultCode: Integer;
 begin
-  Quote := '''';
+  AppDir := ExtractFileDir(ExePath);
+  { The engine is stopped too, and for a reason that only appeared once it
+    started shipping inside the install folder: a surviving syncthing.exe holds
+    _internal\syncthing.exe open, so [InstallDelete] fails without saying so and
+    the copy that follows lands in the retry path. Matched by exact path, never
+    by name — an unrelated copy (SyncTrayzor's, a portable one on a stick) is
+    somebody else's process, and taking it down would stop somebody else's sync. }
   Params := '-NoProfile -ExecutionPolicy Bypass -Command "' +
-            'Get-Process -Name oXeioSync -ErrorAction SilentlyContinue | ' +
-            'Where-Object { $_.Path -eq ' + Quote + ExePath + Quote + ' } | ' +
+            'Get-Process -Name oXeioSync,syncthing -ErrorAction SilentlyContinue | ' +
+            'Where-Object { $_.Path -eq ' + PsQuote(ExePath) + ' -or ' +
+            '$_.Path -eq ' + PsQuote(AppDir + '\_internal\syncthing.exe') + ' -or ' +
+            '$_.Path -eq ' + PsQuote(AppDir + '\syncthing.exe') + ' } | ' +
             'Stop-Process -Force"';
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '',
        SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(2500);
+end;
+
+{ True when nothing this install owns is still locked. The engine counts: it
+  lives in the install folder now, and a file that cannot be replaced is a
+  half-updated installation whether or not it is the one with the icon.
+
+  Note for anyone editing the comments in this section: a brace comment ends at
+  the first closing brace, so writing an Inno constant in one — the app folder,
+  the system folder — silently turns the rest of the sentence into code. }
+function InstallIsFree(const ExePath: String): Boolean;
+var
+  AppDir: String;
+begin
+  AppDir := ExtractFileDir(ExePath);
+  Result := ExeIsFree(ExePath) and
+            ExeIsFree(AppDir + '\_internal\syncthing.exe') and
+            ExeIsFree(AppDir + '\syncthing.exe');
 end;
 
 { Ask any running copy to shut down, and wait for it. Returns True if the way is
@@ -172,16 +234,16 @@ begin
   if Exec(ExePath, '--quit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     if ResultCode = 0 then
     begin
-      Result := ExeIsFree(ExePath);
+      Result := InstallIsFree(ExePath);
       if Result then
         Exit;
-      Log('--quit succeeded but the executable is still locked');
+      Log('--quit succeeded but something in the install folder is still locked');
     end
     else
       Log('--quit reported ' + IntToStr(ResultCode));
 
   ForceStopThisInstall(ExePath);
-  Result := ExeIsFree(ExePath);
+  Result := InstallIsFree(ExePath);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

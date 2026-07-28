@@ -1,17 +1,21 @@
 """Acceptance checks for the built executable.
 
-    python tools/smoke_exe.py [--exe PATH] [--cold] [--keep]
+    python tools/smoke_exe.py [--exe PATH] [--no-engine] [--cold] [--keep]
 
 Runs the frozen build in an isolated data folder and checks the things that only
 a bundle can get wrong: whether QtWebEngine initialises at all, whether the child
 engine starts, whether logging survives having no console, and whether a second
 launch defers to the first.
 
-``--cold`` leaves the data folder empty so the first-run engine download is
-exercised. Note that this is **interactive**: the application asks for consent
-before downloading anything, so a dialog appears on screen and the run blocks
-until someone answers it. The default path copies an already-downloaded engine
-in, which keeps the run fast, offline and unattended.
+The data folder starts empty, which is the check that matters most for a release
+build: a bundle that ships its own engine must reach a running, answering engine
+from nothing, with no dialog and nothing fetched. ``--no-engine`` is for builds
+made without one — the engine is then seeded from this machine's own copy so the
+rest of the checks can still run.
+
+``--cold`` exercises the first-run download instead, on a build that has no
+bundled engine. It is **interactive**: the application asks for consent before
+downloading, so a dialog appears and the run blocks until someone answers it.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EXE = ROOT / "dist" / "oXeioSync" / "oXeioSync.exe"
 GUI_PORT = 19400
 API_KEY = "smoke-test-key-0123456789ab"
+ENGINE_NAME = "syncthing.exe" if os.name == "nt" else "syncthing"
 
 FAILURES: list[str] = []
 PASSES = 0
@@ -86,9 +91,22 @@ def kill_tree(pid: int) -> None:
     subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
 
 
+def bundled_engine(app_dir: Path) -> Path | None:
+    """The engine shipped inside the bundle, wherever the packager put it."""
+    for candidate in (app_dir / ENGINE_NAME, app_dir / "_internal" / ENGINE_NAME):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, default=DEFAULT_EXE)
+    parser.add_argument(
+        "--no-engine",
+        action="store_true",
+        help="the build has no bundled engine; seed one instead of expecting it to ship",
+    )
     parser.add_argument(
         "--cold",
         action="store_true",
@@ -114,11 +132,24 @@ def main(argv: list[str]) -> int:
         encoding="utf-8",
     )
 
+    # The standalone claim, checked before anything is launched: an installed
+    # copy must carry its own engine. Everything below then starts from an empty
+    # data folder, so a pass means it really did run on what it shipped with.
+    shipped = bundled_engine(exe.parent)
     if not args.cold:
-        source = Path(os.environ["LOCALAPPDATA"]) / "oXeioSync" / "bin" / "syncthing.exe"
+        check(
+            "bundle ships its own sync engine",
+            args.no_engine or shipped is not None,
+            f"no {ENGINE_NAME} beside {exe.name} or in its _internal folder",
+        )
+        if shipped is not None:
+            print(f"  (bundled engine: {shipped.relative_to(exe.parent)})")
+
+    if not args.cold and shipped is None:
+        source = Path(os.environ["LOCALAPPDATA"]) / "oXeioSync" / "bin" / ENGINE_NAME
         if source.is_file():
             (data / "bin").mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, data / "bin" / "syncthing.exe")
+            shutil.copy2(source, data / "bin" / ENGINE_NAME)
             print(f"seeded engine from {source}")
         else:
             print("no engine to seed; the run will need the network")

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from .. import paths
 from ..config import DEFAULT_GUI_ADDRESS, Config
 from ..net import (
     describe_port_conflict,
@@ -170,7 +171,7 @@ class SyncthingProcess(QObject):
         self._launched_gui_url = self._config.gui_url()
         self._launched_api_key = self._config.api_key
         command = self._build_command(binary)
-        env = self._build_env()
+        env = self._build_env(binary)
 
         log.info("Starting %s", " ".join(command))
         self._append_log(f"[oXeioSync] starting {binary}")
@@ -282,7 +283,7 @@ class SyncthingProcess(QObject):
         command.extend(self._config.syncthing_extra_args)
         return command
 
-    def _build_env(self) -> dict[str, str]:
+    def _build_env(self, binary: Path) -> dict[str, str]:
         env = os.environ.copy()
         env.update(
             {
@@ -298,6 +299,16 @@ class SyncthingProcess(QObject):
                 "STNORESTART": "1",
             }
         )
+
+        if binary in paths.bundled_syncthing_candidates():
+            # The engine that ships with the application sits in the program
+            # folder, which the installer replaces wholesale on every update.
+            # An engine that upgraded itself there would be silently reverted by
+            # the next install, and the digest published in the notice beside it
+            # would stop describing the file it names. The copy oXeioSync
+            # manages itself is in a folder no installer touches, and is left
+            # free to upgrade exactly as before.
+            env["STNOUPGRADE"] = "1"
         return env
 
     # ----------------------------------------------------------------- signals

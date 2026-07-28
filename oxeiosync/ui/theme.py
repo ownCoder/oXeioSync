@@ -12,10 +12,20 @@ inversion of the light values.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
+
+log = logging.getLogger(__name__)
+
+#: The style to use when the host asks for dark. Windows' native style has no
+#: dark palette to give: with the system set to dark it still hands back a
+#: #f0f0f0 window, so every dark token below would be unreachable. Fusion
+#: follows the host's scheme in both directions.
+DARK_CAPABLE_STYLE = "Fusion"
 
 
 @dataclass(frozen=True)
@@ -115,3 +125,54 @@ def is_dark_mode(widget: QWidget | None = None) -> bool:
 def palette_for(widget: QWidget | None = None) -> Palette:
     """The token set matching the host's current colour scheme."""
     return DARK if is_dark_mode(widget) else LIGHT
+
+
+def follow_host_colour_scheme(app: QApplication) -> bool:
+    """Adopt the host's light/dark setting. Returns True if dark is now active.
+
+    There is no dark-mode switch in this application, by design: the host
+    already has one, and a second one that can disagree with it is a worse
+    answer than none. What was missing is the part that makes the host's answer
+    arrive. Qt reports the scheme faithfully — ``colorScheme()`` says Dark the
+    moment Windows is set to dark — but on Windows the native style supplies no
+    dark palette to go with it, and everything here reads its colours from the
+    palette. The setting was being honoured by nothing.
+
+    So: switch to a style that does honour it, and only in the direction that
+    needs it. Light keeps the native look it already had.
+
+    Connected to the host's own change signal as well, because the setting can
+    be flipped while the application is running — on a schedule, usually at
+    sunset — and every widget here already redraws on a palette change.
+    """
+    hints = app.styleHints()
+    colour_scheme = getattr(hints, "colorScheme", None)
+    if colour_scheme is None:  # Qt older than 6.5 cannot be asked.
+        return is_dark_mode()
+
+    native_style = app.style().objectName()
+    swapped = False
+
+    def apply() -> None:
+        # Whether we swapped the style, not whether the palette is dark: once
+        # the host has gone light, a Fusion palette is light too, so asking
+        # "is it dark now?" would answer no and leave the swap in place for ever.
+        nonlocal swapped
+        wants_dark = colour_scheme() == Qt.ColorScheme.Dark
+        if wants_dark and not is_dark_mode():
+            app.setStyle(DARK_CAPABLE_STYLE)
+            swapped = True
+        elif not wants_dark and swapped:
+            app.setStyle(native_style)
+            swapped = False
+
+    apply()
+
+    changed = getattr(hints, "colorSchemeChanged", None)
+    if changed is not None:
+        changed.connect(apply)
+
+    dark = is_dark_mode()
+    log.info("Host colour scheme: %s (style: %s)", "dark" if dark else "light",
+             app.style().objectName())
+    return dark

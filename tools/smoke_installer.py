@@ -7,7 +7,10 @@ inside a sandbox: ``LOCALAPPDATA`` is redirected, so the install folder, the dat
 folder and the Start Menu entry all land under ``build/`` and this machine's real
 oXeioSync installation and sync database are never touched.
 
-The check that matters most is that an uninstall leaves the user's data alone.
+Two checks matter most: that an uninstall leaves the user's data alone, and that
+the installation reaches a running engine on what the installer put there —
+nothing is seeded into the data folder when the payload carries an engine, so a
+pass means an offline machine would have got the same result.
 """
 
 from __future__ import annotations
@@ -103,13 +106,32 @@ def wait_for(predicate, timeout: float) -> bool:
     return False
 
 
+def installed_engine() -> Path | None:
+    """The engine the installer laid down, wherever the packaging put it."""
+    for candidate in (
+        INSTALL_DIR / "_internal" / "syncthing.exe",
+        INSTALL_DIR / "syncthing.exe",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def seed_data_folder() -> None:
-    """Give the app a config and an engine so it does not need the network."""
+    """Give the app a config, and an engine only if the installer shipped none.
+
+    Seeding when the installation already has one would hide the thing this
+    check is for: that an install on a machine with no engine and no reachable
+    network reaches a running engine anyway.
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "oxeiosync.json").write_text(
         json.dumps({"api_key": API_KEY, "gui_address": f"127.0.0.1:{GUI_PORT}"}),
         encoding="utf-8",
     )
+    if installed_engine() is not None:
+        return
+
     engine = Path(os.environ["LOCALAPPDATA"]) / "oXeioSync" / "bin" / "syncthing.exe"
     if engine.is_file():
         (DATA_DIR / "bin").mkdir(parents=True, exist_ok=True)
@@ -140,6 +162,19 @@ def main(argv: list[str]) -> int:
     check("executable installed", exe.is_file(), str(exe))
     check("_internal tree installed", (INSTALL_DIR / "_internal").is_dir())
     check("uninstaller present", any(INSTALL_DIR.glob("unins*.exe")))
+
+    # The whole point of the installer: what it lays down is enough on its own.
+    engine = installed_engine()
+    check("sync engine installed", engine is not None,
+          f"no syncthing.exe under {INSTALL_DIR}")
+    # Shipping someone else's binary means shipping its terms where they can be
+    # read, not buried in a folder named after an implementation detail.
+    check("engine notice installed where it can be found",
+          (INSTALL_DIR / "ENGINE-NOTICE.txt").is_file(),
+          f"not at the top of {INSTALL_DIR}")
+    check("engine licence installed",
+          (INSTALL_DIR / "LICENSE-engine.txt").is_file(),
+          f"not at the top of {INSTALL_DIR}")
 
     # Inno resolves {autoprograms} through the shell's known-folder API, which
     # does not read the environment — so the shortcut lands in the real Start
@@ -191,6 +226,11 @@ def main(argv: list[str]) -> int:
           "it is somehow still serving")
     check("stale file from the old version removed", not stale.exists(), str(stale))
     check("executable still there after upgrade", exe.is_file())
+    # _internal is cleared and rewritten on every upgrade, and the engine now
+    # lives in it. An upgrade that takes the engine away installs a working app
+    # that cannot sync.
+    check("engine still there after upgrade", installed_engine() is not None,
+          f"no syncthing.exe under {INSTALL_DIR} after the upgrade")
     check("the unrelated copy was left alone", bystander.poll() is None,
           f"the installer killed a copy it does not own (exit {bystander.poll()})")
 

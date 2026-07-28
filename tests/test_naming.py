@@ -27,6 +27,7 @@ APPROVED = {
     "syncthing.exe": "the engine's filename on Windows",
     "oxeiosync-syncthing-": "temp directory prefix during download",
     "https://api.github.com/repos/syncthing/syncthing/releases": "the release API",
+    "https://upgrades.syncthing.net/meta.json": "the release API's rate-limit-free mirror",
     r"syncthing\s+(v[\d][^\s]*)": "regex matching the engine's --version output",
     # Configuration keys, which are part of the on-disk format.
     "syncthing_path": "config key",
@@ -45,9 +46,11 @@ APPROVED = {
     "SyncthingProcess": "a class name in __all__",
     # The one deliberate mention, in Help -> About, where a reader expects to
     # find out what a program is built on.
+    # One constant, not three: adjacent literals — including the f-strings above
+    # and below it — are merged into a single node before this test sees them.
     (
         "</p><p style='color:#898781'>Syncing is powered by Syncthing "
-        "(MPL-2.0), downloaded separately and not modified.</p>"
+        "(MPL-2.0), used unmodified."
     ): "the About dialog's attribution",
 }
 
