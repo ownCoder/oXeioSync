@@ -98,9 +98,10 @@ completions still work.*
 - A folder row per share: a progress meter, and beside it the state in words —
   a percentage, `paused`, or a count of errors
 - A memory chart for the engine itself, and a peer list with per-device rates
-- Light and dark are each a selected set of colours, not an automatic inversion,
-  and the application follows the one Windows is set to — including when that is
-  changed while it is running
+- Dark throughout, and not by inverting a light theme: the surfaces, ink and
+  series colours are a set chosen for a dark ground. Qt's own widgets — menus,
+  dialogs, the tab bar — are given the same tokens, so the frame and the
+  dashboard inside it are the same dark
 
 **Window**
 - The engine's own configuration screen is embedded via QtWebEngine one tab
@@ -321,16 +322,9 @@ Some Linux desktops need an appindicator extension for tray icons. oXeioSync
 notices when no tray is available and shows the window instead, so it stays
 usable.
 
-**How do I turn dark mode on?**
-You don't — Windows does. **Settings → Personalisation → Colours → Choose your
-default app mode → Dark**, and oXeioSync follows, immediately, without a
-restart. There is deliberately no switch in the application: a second one that
-can disagree with the system is worse than none.
-
-The **Log** tab records what it decided at start-up (`Host colour scheme: dark`).
-If that says dark and the window is still light, the setting is being read but
-not applied — say so in an issue rather than looking for a hidden option, and
-include that line.
+**Can I switch to a light theme?**
+No — oXeioSync is dark, and does not follow the Windows app-mode setting in
+either direction. The **Log** tab records it at start-up: `Dark theme applied`.
 
 **Starting over**
 Delete the data folder (below) and launch again — you get a fresh identity, a
@@ -660,16 +654,26 @@ Syncthing 2.x rejects unauthenticated REST calls, so knowing the key matters.
 dependency, crisp rendering at whatever size is asked for, exact control over the
 mark specs, and rotating the icon glyph gives the syncing animation for free.
 
-**Why the Fusion style, and only in the dark.** Every colour here is read back
-from the Qt palette, which is how the dashboard, the charts and the restyled
-configuration page agree with each other and with the window around them. On
-Windows that arrangement had a hole in it: Qt reports the host's colour scheme
-correctly — `colorScheme()` says `Dark` the moment Windows is set to dark — but
-the native style hands back a `#f0f0f0` window regardless, so the dark tokens
-were unreachable and the setting was honoured by nothing. Fusion does follow the
-scheme, so it is used when the host asks for dark, and only then; light keeps
-the native look it already had. The swap is undone if the host goes back to
-light, which it does on a schedule for anyone who has that turned on.
+**Why dark only, and why the Fusion style.** The dashboard's colours are chosen
+for a dark ground and validated on one. Following the host's app-mode setting
+would mean using them on a light surface whenever that setting says so, and it
+would put the appearance of the program in the hands of a preference someone may
+have set for something else entirely. So the palette is supplied rather than
+asked for: `apply_dark_theme` installs it before the first widget exists.
+
+Supplying it is only half of it. Every colour here is read back *from* the Qt
+palette — that is how the painted dashboard, the charts and the restyled
+configuration page agree with each other and with the window around them — and
+Windows' native style paints parts of itself from the system theme rather than
+from the palette it was handed. Applied under it, the content goes dark and the
+tab bar, menu and scrollbars stay light. Fusion draws everything from the
+palette, so it is the style the dark palette is applied through.
+
+This is also what the earlier arrangement got wrong. Qt reports the host's
+scheme perfectly well — `colorScheme()` says `Dark` the moment Windows does —
+but the native style hands back a `#f0f0f0` window regardless, and since every
+token here comes from the palette, the dark set was unreachable. The setting was
+read by something and honoured by nothing.
 
 **Why no processor-load chart?** The engine still reports a `cpuPercent` field,
 but current builds leave it at zero — measured here at 0 throughout a 400 MB

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from . import APP_NAME, APP_VERSION, paths
 from .app import Application
 from .singleinstance import InstanceLock
-from .ui.theme import follow_host_colour_scheme
+from .ui.theme import apply_dark_theme
 
 log = logging.getLogger(__name__)
 
@@ -228,8 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     qapp.setApplicationName(APP_NAME)
     qapp.setApplicationVersion(APP_VERSION)
     qapp.setOrganizationName(APP_NAME)
-    # Before any widget exists, so the first paint is already the right one.
-    follow_host_colour_scheme(qapp)
+    # Before any widget exists, so the first paint is already dark — a window
+    # that flashes white on the way up is the thing this most needs to avoid.
+    apply_dark_theme(qapp)
     _install_excepthook()
 
     # The lock, not the socket, is what guarantees exclusivity: two launches a

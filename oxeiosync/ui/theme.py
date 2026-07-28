@@ -1,4 +1,4 @@
-"""Colour tokens for the dashboard, in light and dark.
+"""Colour tokens for the dashboard.
 
 These are the values from the reference data-visualisation palette, used
 unchanged: categorical slots 1 and 2 for the two throughput series, a one-hue
@@ -6,8 +6,14 @@ blue ramp for progress meters, and the fixed status palette for state. Because
 the palette and the chart surfaces are the documented ones, the published
 validation applies as-is — the hues were not re-derived here.
 
-Dark mode is a *selected* set of steps for the dark surface, not an automatic
-inversion of the light values.
+The application is dark. :func:`apply_dark_theme` installs that at start-up and
+nothing changes it afterwards, so :data:`DARK` is the set in force everywhere.
+
+:data:`LIGHT` is kept because the machinery that reads a palette and answers
+with a token set is worth keeping honest — ``palette_for`` reports what is
+actually installed rather than asserting an answer — and because a light mode,
+if it ever comes back, should come back as a *selected* set of steps like this
+one rather than as an inversion of the dark values.
 """
 
 from __future__ import annotations
@@ -21,10 +27,11 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 log = logging.getLogger(__name__)
 
-#: The style to use when the host asks for dark. Windows' native style has no
-#: dark palette to give: with the system set to dark it still hands back a
-#: #f0f0f0 window, so every dark token below would be unreachable. Fusion
-#: follows the host's scheme in both directions.
+#: The style the dark palette is applied through. Windows' native style paints
+#: parts of itself from the system theme rather than from the palette it is
+#: given — set the application dark under it and the tab bar, the menu and the
+#: scrollbars stay light. Fusion draws everything from the palette, which is the
+#: only way a supplied one is honoured throughout.
 DARK_CAPABLE_STYLE = "Fusion"
 
 
@@ -108,7 +115,12 @@ DARK = Palette(
 
 
 def is_dark_mode(widget: QWidget | None = None) -> bool:
-    """Whether the host is running a dark colour scheme."""
+    """Whether the palette in force is a dark one.
+
+    Reads the palette rather than a flag of our own, so a widget that has been
+    given its own palette gets an answer about itself, and so the answer cannot
+    drift from what is actually on screen.
+    """
     palette: QPalette | None = None
     if widget is not None:
         palette = widget.palette()
@@ -123,56 +135,88 @@ def is_dark_mode(widget: QWidget | None = None) -> bool:
 
 
 def palette_for(widget: QWidget | None = None) -> Palette:
-    """The token set matching the host's current colour scheme."""
+    """The token set matching the palette currently in force."""
     return DARK if is_dark_mode(widget) else LIGHT
 
 
-def follow_host_colour_scheme(app: QApplication) -> bool:
-    """Adopt the host's light/dark setting. Returns True if dark is now active.
+def dark_qpalette() -> QPalette:
+    """Qt's palette, built from the dark tokens above.
 
-    There is no dark-mode switch in this application, by design: the host
-    already has one, and a second one that can disagree with it is a worse
-    answer than none. What was missing is the part that makes the host's answer
-    arrive. Qt reports the scheme faithfully — ``colorScheme()`` says Dark the
-    moment Windows is set to dark — but on Windows the native style supplies no
-    dark palette to go with it, and everything here reads its colours from the
-    palette. The setting was being honoured by nothing.
+    Every colour this application paints itself comes from :data:`DARK`, but the
+    widgets it does *not* paint — menus, dialogs, scrollbars, the tab bar — take
+    theirs from Qt. Handing Qt the same tokens is what stops the frame around
+    the dashboard disagreeing with the dashboard.
 
-    So: switch to a style that does honour it, and only in the direction that
-    needs it. Light keeps the native look it already had.
-
-    Connected to the host's own change signal as well, because the setting can
-    be flipped while the application is running — on a schedule, usually at
-    sunset — and every widget here already redraws on a palette change.
+    Written out rather than derived: Qt's roles do not map onto the design
+    tokens one-to-one, and guessing at the ones that do not (which grey is
+    "Button", what a disabled label should be) is how a palette ends up with a
+    control nobody can read.
     """
-    hints = app.styleHints()
-    colour_scheme = getattr(hints, "colorScheme", None)
-    if colour_scheme is None:  # Qt older than 6.5 cannot be asked.
-        return is_dark_mode()
+    ink = QColor(DARK.ink)
+    ink_secondary = QColor(DARK.ink_secondary)
+    ink_muted = QColor(DARK.ink_muted)
+    surface = QColor(DARK.surface)
+    plane = QColor(DARK.plane)
+    raised = QColor(DARK.raised)
+    accent = QColor(DARK.series_download)
 
-    native_style = app.style().objectName()
-    swapped = False
+    palette = QPalette()
+    roles = QPalette.ColorRole
+    groups = QPalette.ColorGroup
 
-    def apply() -> None:
-        # Whether we swapped the style, not whether the palette is dark: once
-        # the host has gone light, a Fusion palette is light too, so asking
-        # "is it dark now?" would answer no and leave the swap in place for ever.
-        nonlocal swapped
-        wants_dark = colour_scheme() == Qt.ColorScheme.Dark
-        if wants_dark and not is_dark_mode():
-            app.setStyle(DARK_CAPABLE_STYLE)
-            swapped = True
-        elif not wants_dark and swapped:
-            app.setStyle(native_style)
-            swapped = False
+    palette.setColor(roles.Window, plane)
+    palette.setColor(roles.WindowText, ink)
+    palette.setColor(roles.Base, surface)
+    palette.setColor(roles.AlternateBase, raised)
+    palette.setColor(roles.Text, ink)
+    palette.setColor(roles.PlaceholderText, ink_muted)
+    palette.setColor(roles.Button, raised)
+    palette.setColor(roles.ButtonText, ink)
+    palette.setColor(roles.ToolTipBase, surface)
+    palette.setColor(roles.ToolTipText, ink)
+    palette.setColor(roles.BrightText, QColor(DARK.status_critical))
+    palette.setColor(roles.Link, accent)
+    palette.setColor(roles.LinkVisited, accent)
+    palette.setColor(roles.Highlight, accent)
+    palette.setColor(roles.HighlightedText, QColor("#ffffff"))
+    palette.setColor(roles.Light, raised)
+    palette.setColor(roles.Midlight, QColor(DARK.border))
+    palette.setColor(roles.Mid, QColor(DARK.baseline))
+    palette.setColor(roles.Dark, plane)
+    palette.setColor(roles.Shadow, QColor("#000000"))
 
-    apply()
+    # Disabled text has to stay legible while still reading as disabled; the
+    # muted ink is the step the rest of the interface already uses for that.
+    for role in (roles.WindowText, roles.Text, roles.ButtonText):
+        palette.setColor(groups.Disabled, role, ink_muted)
+    palette.setColor(groups.Disabled, roles.Highlight, raised)
+    palette.setColor(groups.Disabled, roles.HighlightedText, ink_secondary)
 
-    changed = getattr(hints, "colorSchemeChanged", None)
-    if changed is not None:
-        changed.connect(apply)
+    return palette
 
-    dark = is_dark_mode()
-    log.info("Host colour scheme: %s (style: %s)", "dark" if dark else "light",
-             app.style().objectName())
-    return dark
+
+def apply_dark_theme(app: QApplication) -> None:
+    """Make the application dark, and keep it dark.
+
+    Not "follow the host": this application is dark, full stop. Following would
+    mean the dashboard's colours — which are chosen for a dark surface, and
+    validated on one — get used on a light one half the time, and it would put
+    the appearance of the program in the hands of a setting the person running
+    it may have chosen for something else entirely.
+
+    Two steps, both needed. The style, because Windows' native style ignores an
+    applied palette in places and would leave light chrome around dark content;
+    Fusion honours what it is given. Then the palette itself, because Fusion
+    picks light or dark from the *host*, and the host is not the authority here.
+    """
+    app.setStyle(DARK_CAPABLE_STYLE)
+    app.setPalette(dark_qpalette())
+
+    # Qt 6.8 and later can tell the platform too, which is what gets the window
+    # frame and the embedded browser's own controls to match. Older Qt simply
+    # does not have it, and the palette above is what does the real work.
+    setter = getattr(app.styleHints(), "setColorScheme", None)
+    if setter is not None:
+        setter(Qt.ColorScheme.Dark)
+
+    log.info("Dark theme applied (style: %s)", app.style().objectName())
