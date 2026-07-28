@@ -17,7 +17,7 @@ code talks to; the application's own interface deliberately does not — see*
 
 [![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
-![tests](https://img.shields.io/badge/tests-244-brightgreen)
+![tests](https://img.shields.io/badge/tests-264-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
 [![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
 
@@ -41,6 +41,12 @@ It is not code-signed, so SmartScreen warns the first time: *More info* →
 ```powershell
 Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
 ```
+
+**On macOS** there is no signed, notarized release yet, so there is no download
+button here — build the `.app` and `.dmg` yourself from source in about a minute
+(see [Building for macOS](#building-for-macos)). The build carries its own engine
+the same way the Windows installer does, so the result needs nothing else, and
+the whole thing installs by dragging it to Applications.
 
 ## Screenshots
 
@@ -134,7 +140,8 @@ completions still work.*
   build time, and is shipped unmodified
 - Falls back to downloading one, verified the same way, for a build made
   without a bundled engine or an installation whose engine has been removed
-- Start on login (Windows, per-user, no elevation)
+- Start on login (per-user, no elevation) — a registry Run key on Windows, a
+  LaunchAgent on macOS
 - Portable mode: keep everything in one relocatable folder
 - Single instance per data folder — launching a second copy raises the first
   one's window instead of starting a rival against the same database. Two
@@ -144,6 +151,9 @@ completions still work.*
 - A one-folder Windows build with no Python needed on the target machine
 - A per-user installer that needs no administrator rights, handles upgrades over
   a running copy, and never deletes your sync database unless you ask it to
+- A macOS `.app` bundle (the engine inside `Contents/Frameworks`) and a
+  drag-to-Applications `.dmg`, ad-hoc signed — see
+  [Building for macOS](#building-for-macos)
 
 ## Not implemented yet
 
@@ -155,7 +165,10 @@ Compared to SyncTrayzor, still missing:
 - Network metering — pausing devices on metered connections.
 - Self-update. The installer handles upgrades, but the app will not fetch one
   for itself.
-- Code signing, so SmartScreen warns the first time the installer runs.
+- Code signing and notarization. On Windows SmartScreen warns the first time the
+  installer runs; on macOS the bundle is only ad-hoc signed — enough to launch,
+  but not notarized (there is no Developer ID), so Gatekeeper warns on first
+  open.
 - Translations. The interface is English only.
 - HTTPS with a self-signed certificate on the engine's own web interface. Not
   just the embedded browser: the REST client verifies certificates, so the
@@ -169,9 +182,11 @@ Compared to SyncTrayzor, still missing:
 
 ## Requirements
 
-**To use it:** nothing, and no network. The installer carries everything — the
-Python runtime and the sync engine both — so a machine that has just been set up
-and has never seen either is enough.
+**To use it:** nothing, and no network. The Windows installer and the macOS
+`.app` each carry everything — the Python runtime and the sync engine both — so a
+machine that has just been set up and has never seen either is enough. Windows 10
+or later, 64-bit; macOS 11 (Big Sur) or later, built for the architecture it was
+packaged on — arm64 on Apple Silicon, x86_64 on Intel, with no universal binary.
 
 **To run from source or build it:** Python 3.11 or newer. A build fetches the
 engine once into `build/vendor/` and bundles it from there; running from source
@@ -189,6 +204,18 @@ note and how to check the file's digest.
 
 To build one yourself instead, see
 [Building the installer](#building-the-installer) below.
+
+**On macOS:** build `oXeioSync.dmg` from source (see
+[Building for macOS](#building-for-macos)), open it, and drag the app to
+Applications. Because the build is ad-hoc signed but not notarized, Gatekeeper
+blocks the very first launch — right-click (or Control-click) oXeioSync in
+Applications and choose *Open*, then *Open* again in the dialog; it launches
+normally from Launchpad or the Dock after that. To skip the right-click, clear
+the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/oXeioSync.app
+```
 
 ### From source
 
@@ -291,26 +318,35 @@ sync engine is stopped cleanly. From a script, use `--quit`.
 
 **"Another program is already listening on 127.0.0.1:8385…"**
 Something else holds the port — very often an oXeioSync left running from
-before. Check the tray first, then ask it to leave:
+before. Check the tray first, then ask it to leave. That is the clean way: it
+stops the engine through its API so the database is flushed.
 
-```bash
+```powershell
 & "$env:LOCALAPPDATA\Programs\oXeioSync\oXeioSync.exe" --quit
 ```
 
-That is the clean way: it stops the engine through its API so the database is
-flushed. To find a copy that will not answer:
-
 ```bash
+/Applications/oXeioSync.app/Contents/MacOS/oXeioSync --quit
+```
+
+To find a copy that will not answer, and what is holding the port:
+
+```powershell
 Get-CimInstance Win32_Process | Where-Object CommandLine -like '*oxeiosync*' | Format-Table ProcessId, Name, CommandLine -AutoSize
 ```
 
 ```bash
-Stop-Process -Id <ProcessId> -Force
+pgrep -fl oxeiosync
+lsof -nP -iTCP -sTCP:LISTEN | grep -i oxeiosync
 ```
 
+Then stop it by id — `Stop-Process -Id <id> -Force` on Windows, `kill <pid>`
+(and `kill -9 <pid>` only if it refuses to go) on macOS.
+
 Two rows for one running copy is normal: an installed build spawns
-`QtWebEngineProcess.exe`, and a source run through a virtual environment shows
-the venv's `pythonw.exe` launcher alongside the base interpreter it starts.
+`QtWebEngineProcess` (`.exe` on Windows), and a source run through a virtual
+environment shows the venv's `pythonw.exe` (Windows) or `python` (macOS)
+launcher alongside the base interpreter it starts.
 
 Or leave it alone and change **Settings → Engine address** to a free port, then
 restart the engine from the tray menu.
@@ -331,8 +367,9 @@ notices when no tray is available and shows the window instead, so it stays
 usable.
 
 **Can I switch to a light theme?**
-No — oXeioSync is dark, and does not follow the Windows app-mode setting in
-either direction. The **Log** tab records it at start-up: `Dark theme applied`.
+No — oXeioSync is dark, and does not follow the host's light/dark preference in
+either direction: neither the Windows app-mode setting nor the macOS Appearance
+setting. The **Log** tab records it at start-up: `Dark theme applied`.
 
 **Starting over**
 Delete the data folder (below) and launch again — you get a fresh identity, a
@@ -357,7 +394,11 @@ Your synced files are wherever you told the engine to put them, and are never
 inside any of the above.
 
 On Linux and macOS the data root is `$XDG_CONFIG_HOME/oXeioSync` or
-`~/.config/oXeioSync`.
+`~/.config/oXeioSync`, holding the same layout — `oxeiosync.json`, `syncthing/`,
+`bin/`, `logs/`, `webview/` and `oxeiosync.lock`. On macOS the program itself is
+the `/Applications/oXeioSync.app` bundle; uninstalling is dragging it to the
+Trash, which — as on Windows — leaves the data root untouched, so your device
+identity and sync database survive a reinstall.
 
 **Portable mode.** Create a `data` directory next to the application before
 first launch. Everything above moves inside it, and the whole installation can
@@ -376,7 +417,7 @@ folders are independent and may run at the same time.
 | `tests/test_naming.py` | Guards the rule that the interface never names the upstream project |
 | `tests/test_packaging.py` | Guards the promise that an installed copy carries its own engine |
 | `tools/fetch_engine.py` | Vendors the sync engine into `build/vendor/` for the bundle |
-| `tools/make_icon.py` | Renders the `.ico` from the app's own drawing code |
+| `tools/make_icon.py` | Renders the platform icon (`.ico` on Windows, `.icns` on macOS) from the app's own drawing code |
 | `tools/build_exe.py` | Builds the executable, and the installer with `--installer` |
 | `tools/smoke_exe.py` | Acceptance checks for the built executable |
 | `tools/smoke_installer.py` | Acceptance checks for install, upgrade and uninstall |
@@ -637,9 +678,10 @@ A few things are particular to the Mac build:
 - **Signing happens outside the source tree.** If the checkout lives in an
   iCloud- or OneDrive-synced folder, the file provider keeps re-stamping
   `com.apple.FinderInfo` onto the bundle, which `codesign` refuses; the build
-  therefore signs and images a copy in a temporary directory and copies only the
-  finished `.dmg` back. The `.dmg` is authoritative — a loose `.app` left in a
-  synced `dist/` may have its signature invalidated by the next sync.
+  therefore signs and images a copy in a temporary directory, then copies the
+  signed `.app` and the finished `.dmg` back into `dist/`. The `.dmg` is the
+  authoritative artifact — a loose `.app` left in a synced `dist/` may have its
+  signature re-stamped and invalidated by the next sync.
 - **The icon** is rendered by `tools/make_icon.py` into `packaging/oxeiosync.icns`
   (via `iconutil`), which needs a working Qt platform plugin. On a build host
   without one the step is skipped with a warning and the bundle takes the
@@ -662,7 +704,7 @@ defaults, so that command is the check this project actually means — and it
 passes. Qt's camelCase overrides are exempted by name, with a comment saying
 why.
 
-207 unit tests, and they need neither a display nor a network — everything they
+264 unit tests (3 skipped), and they need neither a display nor a network — everything they
 touch is either pure logic or stubbed. They cover config parsing and its
 tolerance of bad input, bind-address handling and port probing, overall-status
 derivation, event folding, the restart-backoff and fatal-failure rules, rate
@@ -784,10 +826,10 @@ said nothing. `packaging/entry.py` imports the package by name instead, which
 gives those imports the parent they need. `OXEIOSYNC_BUILD_CONSOLE=1` exists for
 the same reason: a windowed bundle cannot tell you why it failed.
 
-**Start on login from a source checkout.** The registry's `Run` key gives no
-control over the working directory, so a bare `-m oxeiosync` would fail at login.
-The command written for a checkout puts the project directory on `sys.path`
-explicitly. `pip install -e .` produces a tidier entry, and is preferred
+**Start on login from a source checkout.** Neither the Windows `Run` key nor the
+macOS LaunchAgent controls the working directory, so a bare `-m oxeiosync` would
+fail at login. The command written for a checkout puts the project directory on
+`sys.path` explicitly. `pip install -e .` produces a tidier entry, and is preferred
 automatically when present.
 
 **Syncthing's own auto-upgrade is left enabled — for the downloaded copy.** The
