@@ -15,9 +15,11 @@ away, restyled to match.
 code talks to; the application's own interface deliberately does not — see*
 [On naming](#notes-on-a-few-decisions).
 
+[![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
 ![tests](https://img.shields.io/badge/tests-207-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows-blue)
+[![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
 
 ## Screenshots
 
@@ -143,12 +145,29 @@ downloaded at runtime, so no separate install of it is needed.
 
 ### The short way
 
-Run `oXeioSync-setup.exe` and it is installed — per-user, no administrator
-prompt, about ten seconds. It lands in `%LOCALAPPDATA%\Programs\oXeioSync` with
-a Start Menu entry. There is no prebuilt download here yet; build one with
+Download `oXeioSync-setup.exe` from
+[the latest release](https://github.com/ownCoder/oXeioSync/releases/latest) and
+run it — per-user, no administrator prompt, about ten seconds. It lands in
+`%LOCALAPPDATA%\Programs\oXeioSync` with a Start Menu entry.
+
+The installer is not code-signed, so SmartScreen warns the first time it runs:
+*More info* → *Run anyway*. Each release publishes the installer's SHA-256, so
+the download can be checked against it first:
+
+```powershell
+Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
+```
+
+To build one yourself instead, see
 [Building the installer](#building-the-installer) below.
 
 ### From source
+
+Clone the repository:
+
+```bash
+git clone https://github.com/ownCoder/oXeioSync.git
+```
 
 From the project directory, create a virtual environment:
 
@@ -310,6 +329,7 @@ folders are independent and may run at the same time.
 | `oxeiosync/` | The application |
 | `oxeiosync/syncthing/` | Engine supervision: process, REST client, event feed, state model, 1 Hz sampler, binary download |
 | `oxeiosync/ui/` | Tray, dashboard, painted charts, embedded configuration page, settings |
+| `docs/screenshots/` | The images used above |
 | `tests/` | Unit tests — no display or network needed |
 | `tests/test_naming.py` | Guards the rule that the interface never names the upstream project |
 | `tools/make_icon.py` | Renders the `.ico` from the app's own drawing code |
@@ -474,6 +494,37 @@ database is still there afterwards.
 The installer is unsigned, so SmartScreen will warn on first run until it has
 built up reputation. Signing it needs a code-signing certificate.
 
+### Publishing a release
+
+Build from a clean tree and put the result through its acceptance checks first:
+
+```bash
+.venv\Scripts\python.exe tools/build_exe.py --clean --installer
+```
+
+```bash
+.venv\Scripts\python.exe tools/smoke_exe.py
+```
+
+Then take the digest and cut the release:
+
+```powershell
+(Get-FileHash dist\oXeioSync-setup.exe -Algorithm SHA256).Hash
+```
+
+```bash
+gh release create v0.1.0 dist/oXeioSync-setup.exe --title "oXeioSync 0.1.0" --notes-file notes.md
+```
+
+The notes carry that digest, because an unsigned installer gives whoever
+downloads it nothing else to check it against.
+
+The version appears in three places that have to agree, none of which derive
+from the others: `APP_VERSION` in `oxeiosync/__init__.py`, `version` in
+`pyproject.toml`, and the four `vers` fields in `packaging/version_info.txt` —
+which is where the installer reads it from, since Inno Setup takes
+`AppVersion` out of the built executable's own resources.
+
 ## Development
 
 ```bash
@@ -489,13 +540,14 @@ defaults, so that command is the check this project actually means — and it
 passes. Qt's camelCase overrides are exempted by name, with a comment saying
 why.
 
-198 unit tests, and they need neither a display nor a network — everything they
+207 unit tests, and they need neither a display nor a network — everything they
 touch is either pure logic or stubbed. They cover config parsing and its
 tolerance of bad input, bind-address handling and port probing, overall-status
 derivation, event folding, the restart-backoff and fatal-failure rules, rate
 derivation from cumulative counters, axis scaling and byte formatting, release
 selection and checksum verification, the instance lock, the login command the
-autostart entry writes, and the naming rule below.
+autostart entry writes, the folder picker's starting directory, and the naming
+rule below.
 
 `tests/test_naming.py` is worth singling out. The rule that the interface never
 names the upstream project is easy to state and easy to break: three separate
