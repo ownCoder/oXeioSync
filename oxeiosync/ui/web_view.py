@@ -767,19 +767,27 @@ def _rebrand_script(palette: Palette) -> QWebEngineScript:
 
 
 def _placeholder_html(message: str) -> str:
-    """A self-contained page used when the real UI cannot be loaded."""
+    """A self-contained page used when the real UI cannot be loaded.
+
+    Painted from the application's own tokens rather than the browser's system
+    colours: this page fills a tab in a window that is dark by decision, and
+    Chromium would otherwise resolve ``Canvas`` from whatever the platform is
+    set to — a white panel in a dark window, at the exact moment something has
+    already gone wrong.
+    """
+    palette = palette_for()
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{APP_NAME}</title>
 <style>
-  :root {{ color-scheme: light dark; }}
+  :root {{ color-scheme: dark; }}
   body {{
     margin: 0; height: 100vh; display: flex; align-items: center;
     justify-content: center; font-family: "Segoe UI", system-ui, sans-serif;
-    background: Canvas; color: CanvasText;
+    background: {palette.plane}; color: {palette.ink};
   }}
   .card {{ max-width: 30rem; padding: 2rem; text-align: center; }}
   h1 {{ font-size: 1.25rem; font-weight: 600; margin: 0 0 .75rem; }}
-  p {{ margin: 0; opacity: .75; line-height: 1.5; }}
+  p {{ margin: 0; color: {palette.ink_secondary}; line-height: 1.5; }}
 </style></head>
 <body><div class="card">
   <h1>Waiting for the sync engine</h1>
