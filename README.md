@@ -42,11 +42,29 @@ It is not code-signed, so SmartScreen warns the first time: *More info* →
 Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
 ```
 
-**On macOS** there is no signed, notarized release yet, so there is no download
-button here — build the `.app` and `.dmg` yourself from source in about a minute
-(see [Building for macOS](#building-for-macos)). The build carries its own engine
-the same way the Windows installer does, so the result needs nothing else, and
-the whole thing installs by dragging it to Applications.
+[![Download for macOS](https://img.shields.io/badge/Download%20for%20macOS-oXeioSync.dmg-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/ownCoder/oXeioSync/releases/latest/download/oXeioSync.dmg)
+
+macOS 11 (Big Sur) or later, **Apple Silicon** (arm64) — there is no universal or
+Intel build yet. That link always resolves to the newest release. Open the
+`.dmg` and drag oXeioSync to Applications; it carries its own engine the same way
+the Windows installer does, so an offline machine is enough.
+
+It is ad-hoc signed but not notarized, so Gatekeeper warns the first time:
+right-click (or Control-click) the app → *Open* → *Open*. Or clear the quarantine
+flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/oXeioSync.app
+```
+
+Check what you downloaded first if you would rather (the digest is in the release
+notes):
+
+```bash
+shasum -a 256 oXeioSync.dmg
+```
+
+Prefer to build it yourself? See [Building for macOS](#building-for-macos).
 
 ## Screenshots
 
@@ -205,13 +223,13 @@ note and how to check the file's digest.
 To build one yourself instead, see
 [Building the installer](#building-the-installer) below.
 
-**On macOS:** build `oXeioSync.dmg` from source (see
-[Building for macOS](#building-for-macos)), open it, and drag the app to
-Applications. Because the build is ad-hoc signed but not notarized, Gatekeeper
-blocks the very first launch — right-click (or Control-click) oXeioSync in
-Applications and choose *Open*, then *Open* again in the dialog; it launches
-normally from Launchpad or the Dock after that. To skip the right-click, clear
-the quarantine flag once:
+**On macOS:** download `oXeioSync.dmg` (see [Download](#download) above) — or
+build it from source ([Building for macOS](#building-for-macos)) — open it, and
+drag the app to Applications. Because the build is ad-hoc signed but not
+notarized, Gatekeeper blocks the very first launch — right-click (or
+Control-click) oXeioSync in Applications and choose *Open*, then *Open* again in
+the dialog; it launches normally from Launchpad or the Dock after that. To skip
+the right-click, clear the quarantine flag once:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/oXeioSync.app
