@@ -215,6 +215,15 @@ def _install_from_archive(
 ) -> dict:
     name = engine_filename(infix)
     extracted = binary.extract_binary(archive, target, name=name)
+    # A script where a binary should be means the wrong archive member was
+    # picked (release archives carry rc/service files also called "syncthing").
+    # This tool cannot run a cross-arch binary to probe it, but it can refuse
+    # the one thing the engine is definitely not.
+    if extracted.read_bytes()[:2] == b"#!":
+        raise binary.SyncthingBinaryError(
+            f"extracted {name} is a script, not the engine binary — "
+            "the archive layout was not what was expected"
+        )
     legal = extract_legal_files(archive, target)
     digest = sha256_of(extracted)
     write_notice(target, version, legal, digest)

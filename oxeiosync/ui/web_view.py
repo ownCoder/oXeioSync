@@ -715,7 +715,12 @@ def _start_directory(current: str) -> str:
         candidate = Path(text)
         while candidate != candidate.parent and not candidate.is_dir():
             candidate = candidate.parent
-        if candidate.is_dir():
+        # Absolute, or it is worthless: walking a nonsense path up bottoms out at
+        # the relative "." (the process's cwd), and opening the picker there is
+        # exactly the "wherever it last looked" this exists to avoid. On Python
+        # 3.12 is_dir() no longer raises on an embedded null byte — it returns
+        # False — so an absolute check is what makes this reject junk, not luck.
+        if candidate.is_dir() and candidate.is_absolute():
             return str(candidate)
     except (OSError, ValueError) as exc:  # A malformed path is not worth a crash.
         log.debug("Cannot resolve %r as a starting directory: %s", current, exc)

@@ -18,7 +18,7 @@ code talks to; the application's own interface deliberately does not — see*
 [![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
 ![tests](https://img.shields.io/badge/tests-244-brightgreen)
-![platform](https://img.shields.io/badge/platform-Windows-blue)
+![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
 [![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
 
 ## Download
@@ -161,9 +161,11 @@ Compared to SyncTrayzor, still missing:
   just the embedded browser: the REST client verifies certificates, so the
   status snapshots, the throughput sampler, the event feed and the clean
   shutdown would all fail too. Plain HTTP on loopback — the default — is fine.
-- Linux and macOS. The code is written to run there and avoids Windows-only
-  APIs outside a few clearly marked places, but nothing has been tested on
-  either, and start-on-login is implemented for Windows only.
+- Linux. The code is written to run there and avoids Windows-only APIs outside
+  a few clearly marked places, but nothing has been tested on it, and
+  start-on-login is not implemented for it. macOS *is* supported — see
+  [Building for macOS](#building-for-macos) — leaving Linux as the one desktop
+  platform still untried.
 
 ## Requirements
 
@@ -270,9 +272,11 @@ afterwards. The installer uses it for exactly that.
 
 ### Starting it automatically
 
-**Settings → Start oXeioSync when I log in**. This writes a per-user registry
-entry; no elevation and no scheduled task. Pair it with *Start minimised to the
-tray* so login does not put a window on screen.
+**Settings → Start oXeioSync when I log in**. On Windows this writes a per-user
+registry entry; on macOS it writes a per-user LaunchAgent under
+`~/Library/LaunchAgents`. Either way there is no elevation and no scheduled
+task, and it takes effect at the next login. Pair it with *Start minimised to
+the tray* so login does not put a window on screen.
 
 Running from a source checkout works, but `pip install -e .` first gives a
 tidier login entry — see the note at the end of this file.
@@ -595,6 +599,53 @@ from the others: `APP_VERSION` in `oxeiosync/__init__.py`, `version` in
 `pyproject.toml`, and the four `vers` fields in `packaging/version_info.txt` —
 which is where the installer reads it from, since Inno Setup takes
 `AppVersion` out of the built executable's own resources.
+
+## Building for macOS
+
+The same tooling produces a macOS build — the application code is cross-platform
+and only the packaging differs. From a checkout with the dependencies installed
+(Python 3.11+, PySide6, and `pip install pyinstaller`):
+
+```bash
+python tools/build_exe.py --clean --installer
+```
+
+That vendors the macOS sync engine, runs PyInstaller against the shared
+`packaging/oxeiosync.spec` — which wraps the one-folder build into a real
+`dist/oXeioSync.app` with an `Info.plist` — ad-hoc signs the bundle, and packs a
+drag-to-Applications disk image at `dist/oXeioSync.dmg`. Check the result the
+same way Windows does, against an empty data folder:
+
+```bash
+python tools/smoke_exe.py --exe dist/oXeioSync.app/Contents/MacOS/oXeioSync
+```
+
+A few things are particular to the Mac build:
+
+- **Architecture follows the build machine.** On Apple Silicon it is an arm64
+  `.app` — engine, Qt and Python all arm64; on an Intel Mac the same command
+  produces an x86_64 build. There is no universal binary.
+- **Ad-hoc signed, not notarized.** There is no Developer ID, so the signature
+  is only enough to let Apple Silicon launch the app at all (an unsigned bundle
+  is killed on sight). On first open Gatekeeper still warns — right-click the
+  app → *Open*, or clear the quarantine flag:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/oXeioSync.app
+  ```
+
+- **Signing happens outside the source tree.** If the checkout lives in an
+  iCloud- or OneDrive-synced folder, the file provider keeps re-stamping
+  `com.apple.FinderInfo` onto the bundle, which `codesign` refuses; the build
+  therefore signs and images a copy in a temporary directory and copies only the
+  finished `.dmg` back. The `.dmg` is authoritative — a loose `.app` left in a
+  synced `dist/` may have its signature invalidated by the next sync.
+- **The icon** is rendered by `tools/make_icon.py` into `packaging/oxeiosync.icns`
+  (via `iconutil`), which needs a working Qt platform plugin. On a build host
+  without one the step is skipped with a warning and the bundle takes the
+  default icon; run it once on a normal desktop session to produce the `.icns`.
+- **Start on login** is a per-user LaunchAgent, not a registry entry — see
+  [Starting it automatically](#starting-it-automatically).
 
 ## Development
 

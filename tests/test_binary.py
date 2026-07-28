@@ -280,9 +280,32 @@ def test_binary_is_extracted_from_a_nested_archive(tmp_path):
         zf.writestr(f"{root}/etc/linux-systemd/user/syncthing.service", "unit")
         zf.writestr(f"{root}/syncthing.exe", b"MZ binary")
 
-    extracted = binary.extract_binary(archive, tmp_path / "out")
+    # A Windows release archive, whatever host runs this: name the member
+    # explicitly so the default binary name (which follows the host) does not
+    # decide whether the test can find "syncthing.exe" inside it.
+    extracted = binary.extract_binary(archive, tmp_path / "out", name="syncthing.exe")
 
     assert extracted.read_bytes() == b"MZ binary"
+
+
+def test_extension_less_binary_wins_over_a_same_named_service_script(tmp_path):
+    """A macOS/Linux archive names the engine and its rc scripts both "syncthing".
+
+    The executable sits at the top level; the service definitions are deeper in
+    etc/. Extracting must pick the executable, not the first "syncthing" the
+    archive happens to list — which was a shell script, silently shipped.
+    """
+    archive = tmp_path / "syncthing-macos-arm64-v2.1.2.zip"
+    root = "syncthing-macos-arm64-v2.1.2"
+    with zipfile.ZipFile(archive, "w") as zf:
+        # Deeper service scripts listed first, exactly as they trip the bug.
+        zf.writestr(f"{root}/etc/freebsd-rc/syncthing", "#!/bin/sh\n# rc script\n")
+        zf.writestr(f"{root}/etc/linux-systemd/system/syncthing", "not the binary")
+        zf.writestr(f"{root}/syncthing", b"\xcf\xfa\xed\xfe real Mach-O")
+
+    extracted = binary.extract_binary(archive, tmp_path / "out", name="syncthing")
+
+    assert extracted.read_bytes() == b"\xcf\xfa\xed\xfe real Mach-O"
 
 
 def test_archive_without_the_binary_is_rejected(tmp_path):

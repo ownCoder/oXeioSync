@@ -456,12 +456,23 @@ def extract_binary(archive: Path, into: Path, name: str | None = None) -> Path:
 
 
 def _match_member(names: list[str], wanted: str) -> str:
-    """Find the executable inside an archive whose layout we don't control."""
-    for name in names:
+    """Find the executable inside an archive whose layout we don't control.
+
+    On platforms where the binary has no extension the name is ambiguous: a
+    release archive carries the executable at its top level *and* service
+    definitions also called ``syncthing`` deeper down (``etc/linux-systemd``,
+    ``etc/freebsd-rc`` and the like). Picking the first match extracted an rc
+    script instead of the engine. The real executable is the shallowest one, so
+    among the matches the fewest-segment path wins — which on Windows, where the
+    name ends in ``.exe`` and is unique, changes nothing.
+    """
+    matches = [
+        name
+        for name in names
         # Guard against path traversal in a downloaded archive, and ignore the
         # directory entries and extra files (LICENSE, README) alongside it.
-        if ".." in Path(name).parts:
-            continue
-        if Path(name).name == wanted:
-            return name
-    raise SyncthingBinaryError(f"No {wanted} found inside the release archive")
+        if ".." not in Path(name).parts and Path(name).name == wanted
+    ]
+    if not matches:
+        raise SyncthingBinaryError(f"No {wanted} found inside the release archive")
+    return min(matches, key=lambda name: len(Path(name).parts))

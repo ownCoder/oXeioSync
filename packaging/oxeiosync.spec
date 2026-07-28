@@ -29,7 +29,10 @@ WORK_DIR = Path(workpath).resolve()  # noqa: F821
 ROOT = SPEC_DIR.parent
 
 APP_NAME = "oXeioSync"
-ICON = SPEC_DIR / "oxeiosync.ico"
+IS_MACOS = sys.platform == "darwin"
+# The container format follows the platform; tools/make_icon.py renders both.
+ICON = SPEC_DIR / ("oxeiosync.icns" if IS_MACOS else "oxeiosync.ico")
+BUNDLE_IDENTIFIER = "com.owncoder.oxeiosync"
 
 # A windowed build has nowhere to print a start-up failure. Setting
 # OXEIOSYNC_BUILD_CONSOLE=1 produces an otherwise identical build that keeps its
@@ -47,7 +50,9 @@ _parts = (APP_VERSION.split(".") + ["0", "0", "0", "0"])[:4]
 VERSION_TUPLE = tuple(int(p) if p.isdigit() else 0 for p in _parts)
 
 # Written into the build directory, not the source tree: a spec should not leave
-# generated files behind next to the code.
+# generated files behind next to the code. Windows-only: it is a Win32 version
+# resource, and PyInstaller ignores `version=` on macOS, where the version comes
+# from the Info.plist assembled for the BUNDLE at the end of this file instead.
 VERSION_FILE = WORK_DIR / "version_info.txt"
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 VERSION_FILE.write_text(
@@ -277,7 +282,7 @@ exe = EXE(  # noqa: F821
     codesign_identity=None,
     entitlements_file=None,
     icon=str(ICON) if ICON.is_file() else None,
-    version=str(VERSION_FILE),
+    version=str(VERSION_FILE) if not IS_MACOS else None,
 )
 
 coll = COLLECT(  # noqa: F821
@@ -289,3 +294,34 @@ coll = COLLECT(  # noqa: F821
     upx_exclude=[],
     name=BUILD_NAME,
 )
+
+# --- macOS application bundle ------------------------------------------------
+# COLLECT leaves a plain one-folder tree; BUNDLE wraps it into a real `.app`
+# with an Info.plist. Everything above is shared with the Windows build — only
+# the final container differs. The engine lands in Contents/Frameworks (where
+# `sys._MEIPASS` points inside a macOS bundle), which is one of the places the
+# application's paths.bundled_syncthing_candidates() already looks.
+if IS_MACOS:
+    app = BUNDLE(  # noqa: F821
+        coll,
+        name=f"{BUILD_NAME}.app",
+        icon=str(ICON) if ICON.is_file() else None,
+        bundle_identifier=BUNDLE_IDENTIFIER,
+        version=APP_VERSION,
+        info_plist={
+            "CFBundleName": APP_NAME,
+            "CFBundleDisplayName": APP_NAME,
+            "CFBundleShortVersionString": APP_VERSION,
+            "CFBundleVersion": APP_VERSION,
+            # Retina: without this Qt renders at 1x and everything looks soft.
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+            # A tray application that keeps running with its window closed, so
+            # the Dock icon is kept (LSUIElement is deliberately not set): a
+            # menu-bar-only agent would hide the window's own menu bar too.
+            "LSUIElement": False,
+            "NSHumanReadableCopyright": "oXeioSync is MIT-licensed. Bundled sync "
+            "engine: Syncthing, MPL-2.0, unmodified — see ENGINE-NOTICE.txt.",
+        },
+    )
+

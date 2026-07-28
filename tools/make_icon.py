@@ -1,21 +1,26 @@
-"""Build the application's ``.ico`` from the icon the app paints at runtime.
+"""Build the application's icon from the icon the app paints at runtime.
 
 The tray icon is drawn with QPainter rather than shipped as a file, so the
-executable's icon is generated from that same code — one definition, and the
-Explorer icon can never drift from the tray icon.
+platform icon is generated from that same code — one definition, and the icon
+Explorer or Finder shows can never drift from the tray icon.
 
-Qt can write a single-image ``.ico``, but Windows then downscales that one image
-for every size and 16px comes out muddy. So the container is assembled here from
-PNGs rendered natively at each size. PNG-encoded entries are valid ICO from
-Windows Vista onwards.
+The container format follows the platform: a Windows ``.ico`` assembled here
+from per-size PNGs (a single-image .ico downscales muddily at 16px), or a macOS
+``.icns`` built with ``iconutil`` from a rendered ``.iconset``. ``iconutil``
+ships with every macOS, the same way this build already leans on Inno Setup on
+Windows.
 
-    python tools/make_icon.py [output.ico]
+    python tools/make_icon.py [output.ico|output.icns]
+
+With no argument it writes the icon its own platform needs.
 """
 
 from __future__ import annotations
 
 import struct
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,9 +30,31 @@ from PySide6.QtGui import QGuiApplication  # noqa: E402
 
 #: Sizes Windows asks for: Explorer small/medium/large, taskbar, and the big one
 #: used by the shell and installers.
-SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
+ICO_SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
 
-DEFAULT_OUTPUT = Path(__file__).resolve().parent.parent / "packaging" / "oxeiosync.ico"
+#: The .iconset members macOS expects, as (size, filename). The @2x entries are
+#: the same pixels as the next size up, named for the Retina slot they fill.
+ICONSET_MEMBERS = (
+    (16, "icon_16x16.png"),
+    (32, "icon_16x16@2x.png"),
+    (32, "icon_32x32.png"),
+    (64, "icon_32x32@2x.png"),
+    (128, "icon_128x128.png"),
+    (256, "icon_128x128@2x.png"),
+    (256, "icon_256x256.png"),
+    (512, "icon_256x256@2x.png"),
+    (512, "icon_512x512.png"),
+    (1024, "icon_512x512@2x.png"),
+)
+
+PACKAGING = Path(__file__).resolve().parent.parent / "packaging"
+
+
+def default_output() -> Path:
+    """The icon this platform's packaging wants."""
+    if sys.platform == "darwin":
+        return PACKAGING / "oxeiosync.icns"
+    return PACKAGING / "oxeiosync.ico"
 
 
 def render_png(size: int) -> bytes:
@@ -79,20 +106,56 @@ def build_ico(images: dict[int, bytes]) -> bytes:
     return header + bytes(entries) + bytes(payloads)
 
 
+def write_ico(output: Path) -> None:
+    images = {size: render_png(size) for size in ICO_SIZES}
+    output.write_bytes(build_ico(images))
+    print(f"wrote {output} ({output.stat().st_size:,} bytes, {len(ICO_SIZES)} sizes)")
+
+
+def write_icns(output: Path) -> None:
+    """Render an ``.iconset`` and let ``iconutil`` fold it into an ``.icns``.
+
+    iconutil is part of macOS, so this needs nothing installed — but it is macOS
+    only, which is why it is reached through a platform branch rather than run
+    unconditionally.
+    """
+    with tempfile.TemporaryDirectory(prefix="oxeiosync-iconset-") as tmp:
+        iconset = Path(tmp) / "oxeiosync.iconset"
+        iconset.mkdir()
+        # Render each distinct size once, then write every member that uses it.
+        rendered: dict[int, bytes] = {}
+        for size, name in ICONSET_MEMBERS:
+            if size not in rendered:
+                rendered[size] = render_png(size)
+            (iconset / name).write_bytes(rendered[size])
+
+        result = subprocess.run(
+            ["iconutil", "--convert", "icns", str(iconset), "--output", str(output)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"iconutil failed: {result.stderr.strip() or result.stdout.strip()}")
+
+    print(
+        f"wrote {output} ({output.stat().st_size:,} bytes, "
+        f"{len({s for s, _ in ICONSET_MEMBERS})} sizes)"
+    )
+
+
 def main(argv: list[str]) -> int:
-    output = Path(argv[1]) if len(argv) > 1 else DEFAULT_OUTPUT
+    output = Path(argv[1]) if len(argv) > 1 else default_output()
     output.parent.mkdir(parents=True, exist_ok=True)
 
     # A GUI application is needed before any QPixmap can be created.
     app = QGuiApplication(argv or ["make_icon"])
     try:
-        images = {size: render_png(size) for size in SIZES}
-        output.write_bytes(build_ico(images))
+        if output.suffix.lower() == ".icns":
+            write_icns(output)
+        else:
+            write_ico(output)
     finally:
         del app
-
-    total = output.stat().st_size
-    print(f"wrote {output} ({total:,} bytes, {len(SIZES)} sizes)")
     return 0
 
 
