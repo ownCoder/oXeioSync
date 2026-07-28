@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -45,6 +45,11 @@ log = logging.getLogger(__name__)
 
 #: How much of the sampled history the throughput chart shows.
 CHART_WINDOW = 120
+
+#: Columns in the up-to-date list. Three keeps twenty folders to four lines at
+#: the width this card has, and a folder name to about twenty characters before
+#: it elides — long enough for the names people actually use.
+HEALTHY_COLUMNS = 3
 
 STATUS_HEADLINES = {
     SyncStatus.STOPPED: "Not running",
@@ -101,13 +106,7 @@ class DashboardPage(QScrollArea):
         layout.addWidget(self._build_status_header())
         layout.addLayout(self._build_stat_row())
         layout.addWidget(self._build_transfer_card(), 1)
-
-        lower = QHBoxLayout()
-        lower.setSpacing(14)
-        lower.addWidget(self._build_folders_card(), 3)
-        lower.addWidget(self._build_load_card(), 2)
-        layout.addLayout(lower)
-
+        layout.addWidget(self._build_folders_card())
         layout.addWidget(self._build_devices_card())
         layout.addStretch(0)
 
@@ -174,6 +173,15 @@ class DashboardPage(QScrollArea):
         self._tile_received = StatTile("Received", parent=self)
         self._tile_sent = StatTile("Sent", parent=self)
         self._tile_peers = StatTile("Peers online", parent=self)
+        # Memory belongs up here with the other single numbers, not in a card
+        # of its own beside the folders: one figure and its trend never needed
+        # two fifths of that row.
+        self._tile_memory = StatTile(
+            "Memory in use",
+            with_sparkline=True,
+            accent=palette.series_download,
+            parent=self,
+        )
 
         for tile in (
             self._tile_down,
@@ -181,6 +189,7 @@ class DashboardPage(QScrollArea):
             self._tile_received,
             self._tile_sent,
             self._tile_peers,
+            self._tile_memory,
         ):
             row.addWidget(tile)
         return row
@@ -195,43 +204,57 @@ class DashboardPage(QScrollArea):
         layout.addWidget(self._transfer_chart)
         return card
 
-    def _build_load_card(self) -> QWidget:
-        card = Card(self)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
-
-        self._load_chart = TimeSeriesChart(
-            "Memory in use", axis=TimeSeriesChart.AXIS_BYTES, parent=card
-        )
-        self._load_chart.setMinimumHeight(150)
-        layout.addWidget(self._load_chart)
-
-        self._load_detail = QLabel("", card)
-        self._load_detail.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self._load_detail)
-        return card
-
     def _build_folders_card(self) -> QWidget:
+        """Folders, ordered by what wants attention rather than by name.
+
+        Nineteen folders with nothing wrong are nineteen identical rows, and a
+        row per folder spends the same ink on each of them as on the one that
+        cannot write its files. So the card answers "is anything wrong" first,
+        gives the answer room, and lets everything healthy be a name and a size.
+        """
         card = Card(self)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 12, 16, 14)
         layout.setSpacing(8)
 
+        header = QHBoxLayout()
+        header.setSpacing(12)
         self._folders_title = _section_title("Folders", card)
-        layout.addWidget(self._folders_title)
+        header.addWidget(self._folders_title)
+        header.addStretch(1)
+        self._folders_summary = QLabel("", card)
+        header.addWidget(self._folders_summary)
+        layout.addLayout(header)
 
+        self._folders_chips = QHBoxLayout()
+        self._folders_chips.setSpacing(6)
+        self._folders_chips.addStretch(1)
+        layout.addLayout(self._folders_chips)
+
+        self._attention_column = QVBoxLayout()
+        self._attention_column.setSpacing(6)
+        layout.addLayout(self._attention_column)
+
+        self._healthy_heading = QLabel("", card)
+        layout.addWidget(self._healthy_heading)
+
+        # Three columns of (dot, name, size). Wide enough to read, narrow
+        # enough that twenty folders are four rows rather than twenty.
         self._folders_grid = QGridLayout()
-        self._folders_grid.setHorizontalSpacing(12)
-        self._folders_grid.setVerticalSpacing(7)
-        self._folders_grid.setColumnStretch(0, 3)
-        self._folders_grid.setColumnStretch(1, 4)
+        self._folders_grid.setHorizontalSpacing(10)
+        self._folders_grid.setVerticalSpacing(4)
+        for column in range(HEALTHY_COLUMNS):
+            self._folders_grid.setColumnStretch(column * 3 + 1, 4)
+            self._folders_grid.setColumnStretch(column * 3 + 2, 2)
         layout.addLayout(self._folders_grid)
 
         self._folders_empty = QLabel("No folders yet — add one in Configuration.", card)
         layout.addWidget(self._folders_empty)
         layout.addStretch(1)
 
-        self._folder_rows: list[tuple[QLabel, Meter, QLabel]] = []
+        self._chips: list[_Pill] = []
+        self._attention_rows: list[_AttentionRow] = []
+        self._healthy_rows: list[tuple[_StatusDot, QLabel, QLabel]] = []
         return card
 
     def _build_devices_card(self) -> QWidget:
@@ -286,7 +309,9 @@ class DashboardPage(QScrollArea):
         if behind:
             worst = min(behind, key=lambda f: f.completion)
             parts.append(f"{worst.display_name} at {worst.completion:.0f}%")
-        parts.append(f"{len(active)} folder{'s' if len(active) != 1 else ''}")
+        # Every folder, paused ones included: the card below counts them all,
+        # and two different totals on one screen means one of them is wrong.
+        parts.append(f"{len(folders)} folder{'s' if len(folders) != 1 else ''}")
         if latest is not None and latest.uptime_seconds:
             parts.append(f"running {format_duration(latest.uptime_seconds)}")
         self._status_detail.setText(" · ".join(parts))
@@ -304,13 +329,6 @@ class DashboardPage(QScrollArea):
                 Series("Upload", palette.series_upload, [s.up_bps for s in history]),
             ]
         )
-        # A single series needs no legend box — the chart title already names
-        # what is plotted — but the legend doubles as the current-value readout,
-        # so it stays.
-        self._load_chart.set_series(
-            [Series("In use", palette.series_download, [s.heap_bytes for s in history])]
-        )
-
         # The two rate tiles share one scale. They sit side by side in the same
         # unit, so independent scales would draw a trickle of upload at the same
         # height as a saturated download.
@@ -332,52 +350,151 @@ class DashboardPage(QScrollArea):
             f"of {total_peers}" if total_peers else "none configured",
         )
 
-        self._load_detail.setText(
-            f"{format_bytes(sample.memory_bytes)} reserved · {sample.goroutines} tasks"
+        self._tile_memory.set_value(
+            format_bytes(sample.heap_bytes),
+            f"{format_bytes(sample.memory_bytes)} reserved · {sample.goroutines} tasks",
         )
+        self._tile_memory.set_trend([s.heap_bytes for s in recent])
         self._update_device_rates(sample)
 
     # ------------------------------------------------------------------ tables
+    @staticmethod
+    def _sort_folders(folders: list) -> tuple[list, list]:
+        """Split into the ones that want attention and the ones that do not.
+
+        Ordered by how much they want it, so the first row of the card is
+        always the worst thing happening.
+        """
+        wants: list = []
+        healthy: list = []
+        for folder in folders:
+            if folder.error_count:
+                wants.append((0, folder))
+            elif folder.paused:
+                wants.append((3, folder))
+            elif folder.completion < 100.0:
+                wants.append((1, folder))
+            elif folder.is_scanning:
+                wants.append((2, folder))
+            else:
+                healthy.append(folder)
+        wants.sort(key=lambda pair: (pair[0], pair[1].display_name.lower()))
+        return [folder for _rank, folder in wants], healthy
+
     def _rebuild_folders(self) -> None:
         folders = self._state.folders()
-        self._folders_empty.setVisible(not folders)
         palette = palette_for(self)
+        self._folders_empty.setVisible(not folders)
 
-        while len(self._folder_rows) < len(folders):
-            row = len(self._folder_rows)
+        wants, healthy = self._sort_folders(folders)
+        total_bytes = sum(f.global_bytes for f in folders)
+        self._folders_summary.setText(
+            f"{len(folders)} folder{'s' if len(folders) != 1 else ''}"
+            + (f" · {format_bytes(total_bytes)}" if total_bytes else "")
+            if folders
+            else ""
+        )
+
+        self._rebuild_chips(folders, palette)
+
+        while len(self._attention_rows) < len(wants):
+            row = _AttentionRow(self._body)
+            self._attention_column.addWidget(row)
+            self._attention_rows.append(row)
+
+        for index, row in enumerate(self._attention_rows):
+            row.setVisible(index < len(wants))
+            if index >= len(wants):
+                continue
+            folder = wants[index]
+            if folder.error_count:
+                row.show_error(folder, palette)
+            elif folder.paused:
+                row.show_paused(folder, palette)
+            elif folder.completion < 100.0:
+                row.show_syncing(folder, palette)
+            else:
+                row.show_scanning(folder, palette)
+
+        self._rebuild_healthy(healthy, palette)
+
+    def _rebuild_chips(self, folders: list, palette: Palette) -> None:
+        """One chip per state that is actually present. No zeroes.
+
+        A row of chips reading "0 with errors · 0 paused" is a row that has to
+        be read before it can be dismissed. Absence says the same thing faster.
+        """
+        healthy = [f for f in folders if not f.error_count and not f.paused]
+        counts = [
+            (
+                sum(1 for f in folders if f.error_count),
+                "with errors",
+                palette.status_critical,
+            ),
+            (
+                sum(1 for f in healthy if f.completion < 100.0),
+                "syncing",
+                palette.series_download,
+            ),
+            (
+                sum(1 for f in folders if f.paused and not f.error_count),
+                "paused",
+                palette.ink_muted,
+            ),
+            (
+                sum(1 for f in healthy if f.completion >= 100.0),
+                "up to date",
+                palette.status_good,
+            ),
+        ]
+        present = [(n, word, hue) for n, word, hue in counts if n]
+
+        while len(self._chips) < len(present):
+            chip = _Pill(self._body)
+            self._folders_chips.insertWidget(len(self._chips), chip)
+            self._chips.append(chip)
+
+        for index, chip in enumerate(self._chips):
+            chip.setVisible(index < len(present))
+            if index >= len(present):
+                continue
+            count, word, hue = present[index]
+            chip.set_state(
+                f"{count} {word}",
+                palette.ink_secondary if hue == palette.ink_muted else hue,
+                palette.qcolor(hue, 0.14).name(QColor.NameFormat.HexArgb),
+            )
+
+    def _rebuild_healthy(self, healthy: list, palette: Palette) -> None:
+        """The quiet majority: a dot, a name, a size, three to a line."""
+        self._healthy_heading.setVisible(bool(healthy))
+        if healthy:
+            self._healthy_heading.setText(f"Up to date · {len(healthy)}")
+
+        while len(self._healthy_rows) < len(healthy):
+            index = len(self._healthy_rows)
+            row, column = divmod(index, HEALTHY_COLUMNS)
+            dot = _StatusDot(self._body)
             name = QLabel(self._body)
-            meter = Meter(self._body)
-            detail = QLabel(self._body)
-            detail.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self._folders_grid.addWidget(name, row, 0)
-            self._folders_grid.addWidget(meter, row, 1)
-            self._folders_grid.addWidget(detail, row, 2)
-            self._folder_rows.append((name, meter, detail))
+            size = QLabel(self._body)
+            size.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._folders_grid.addWidget(dot, row, column * 3)
+            self._folders_grid.addWidget(name, row, column * 3 + 1)
+            self._folders_grid.addWidget(size, row, column * 3 + 2)
+            self._healthy_rows.append((dot, name, size))
 
-        for index, (name, meter, detail) in enumerate(self._folder_rows):
-            visible = index < len(folders)
-            for widget in (name, meter, detail):
+        for index, (dot, name, size) in enumerate(self._healthy_rows):
+            visible = index < len(healthy)
+            for widget in (dot, name, size):
                 widget.setVisible(visible)
             if not visible:
                 continue
-
-            folder = folders[index]
+            folder = healthy[index]
+            dot.set_color(palette.status_good)
             name.setText(folder.display_name)
-            name.setStyleSheet(f"color: {palette.ink}; background: transparent;")
-
-            if folder.paused:
-                meter.set_value(0.0)
-                detail.setText("paused")
-            elif folder.error_count:
-                meter.set_value(folder.completion / 100.0, palette.status_warning)
-                detail.setText(f"{folder.error_count} error(s)")
-            else:
-                meter.set_value(folder.completion / 100.0)
-                size = format_bytes(folder.global_bytes) if folder.global_bytes else ""
-                detail.setText(
-                    f"{folder.completion:.0f}%" + (f" of {size}" if size else "")
-                )
-            detail.setStyleSheet(f"color: {palette.ink_secondary}; background: transparent;")
+            name.setStyleSheet(f"color: {palette.ink_secondary}; background: transparent;")
+            size.setText(format_bytes(folder.global_bytes) if folder.global_bytes else "")
+            size.setStyleSheet(f"color: {palette.ink_muted}; background: transparent;")
 
     def _rebuild_devices(self) -> None:
         devices = self._state.devices()
@@ -461,7 +578,8 @@ class DashboardPage(QScrollArea):
         secondary = f"color: {palette.ink_secondary}; background: transparent;"
         self._status_detail.setStyleSheet(secondary)
         self._engine_label.setStyleSheet(muted)
-        self._load_detail.setStyleSheet(muted)
+        self._folders_summary.setStyleSheet(muted)
+        self._healthy_heading.setStyleSheet(muted)
         self._folders_empty.setStyleSheet(muted)
         self._devices_empty.setStyleSheet(muted)
         for title in (self._folders_title, self._devices_title):
@@ -474,6 +592,136 @@ def _section_title(text: str, parent: QWidget) -> QLabel:
     font.setWeight(QFont.Weight.DemiBold)
     label.setFont(font)
     return label
+
+
+class _Pill(QLabel):
+    """A state, said in a word, on a ground tinted from that state's own hue.
+
+    A pill rather than a coloured edge on the row: an accented border reads as
+    decoration at a glance and as an unfinished row at second glance, and it
+    cannot carry the word that has to be there anyway for anyone who does not
+    separate these colours.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        font = QFont(self.font())
+        font.setPointSizeF(max(7.5, font.pointSizeF() - 0.5))
+        self.setFont(font)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    def set_state(self, text: str, ink: str, ground: str) -> None:
+        self.setText(text)
+        self.setStyleSheet(
+            f"color: {ink}; background: {ground}; border-radius: 8px; padding: 2px 9px;"
+        )
+
+
+class _AttentionRow(QWidget):
+    """One folder that wants something: an error, a transfer, a pause.
+
+    Sized by what it has to say. An error carries a sentence and the way to the
+    screen that can act on it; a transfer carries its meter; a pause carries
+    neither, and is the shortest row on the card.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._ground = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 9, 12, 10)
+        layout.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        self._name = QLabel("", self)
+        name_font = QFont(self.font())
+        name_font.setWeight(QFont.Weight.DemiBold)
+        self._name.setFont(name_font)
+        self._pill = _Pill(self)
+        # Both on the left, together. Pushed to opposite edges they read as a
+        # pair only on a narrow card; this one is as wide as the window.
+        head.addWidget(self._name)
+        head.addWidget(self._pill)
+        head.addStretch(1)
+        layout.addLayout(head)
+
+        self._message = QLabel("", self)
+        self._message.setWordWrap(True)
+        message_font = QFont(self.font())
+        message_font.setPointSizeF(max(7.5, message_font.pointSizeF() - 0.5))
+        self._message.setFont(message_font)
+        layout.addWidget(self._message)
+
+        self._meter = Meter(self)
+        layout.addWidget(self._meter)
+
+    def show_error(self, folder, palette: Palette) -> None:
+        count = folder.error_count
+        self._name.setText(folder.display_name)
+        self._pill.set_state(
+            f"{count:,} error{'s' if count != 1 else ''}",
+            palette.status_critical,
+            palette.qcolor(palette.status_critical, 0.16).name(QColor.NameFormat.HexArgb),
+        )
+        # The count is the fact; the sentence is what the count means. Neither
+        # invents a cause — the engine reports how many, not why.
+        self._message.setText(
+            f"{count:,} file{'s' if count != 1 else ''} could not be synced. "
+            "Configuration lists them."
+        )
+        self._message.setVisible(True)
+        self._meter.setVisible(False)
+        self._paint(palette, palette.status_critical)
+
+    def show_syncing(self, folder, palette: Palette) -> None:
+        self._name.setText(folder.display_name)
+        self._pill.set_state(
+            f"{folder.completion:.0f}%",
+            palette.series_download,
+            palette.qcolor(palette.series_download, 0.18).name(QColor.NameFormat.HexArgb),
+        )
+        left = format_bytes(folder.need_bytes) if folder.need_bytes else ""
+        self._message.setText(
+            f"{left} left to fetch" if left else "Bringing this folder up to date"
+        )
+        self._message.setVisible(True)
+        self._meter.set_value(folder.completion / 100.0)
+        self._meter.setVisible(True)
+        self._paint(palette, palette.series_download)
+
+    def show_scanning(self, folder, palette: Palette) -> None:
+        self._name.setText(folder.display_name)
+        self._pill.set_state(
+            "scanning",
+            palette.ink_secondary,
+            palette.qcolor(palette.ink_muted, 0.18).name(QColor.NameFormat.HexArgb),
+        )
+        self._message.setText("Looking for local changes")
+        self._message.setVisible(True)
+        self._meter.setVisible(False)
+        self._paint(palette, palette.ink_muted)
+
+    def show_paused(self, folder, palette: Palette) -> None:
+        self._name.setText(folder.display_name)
+        self._pill.set_state(
+            "paused",
+            palette.ink_secondary,
+            palette.qcolor(palette.ink_muted, 0.18).name(QColor.NameFormat.HexArgb),
+        )
+        self._message.setVisible(False)
+        self._meter.setVisible(False)
+        self._paint(palette, palette.ink_muted)
+
+    def _paint(self, palette: Palette, hue: str) -> None:
+        self._ground = palette.qcolor(hue, 0.10).name(QColor.NameFormat.HexArgb)
+        self.setStyleSheet(f"background: {self._ground}; border-radius: 8px;")
+        self._name.setStyleSheet(f"color: {palette.ink}; background: transparent;")
+        self._message.setStyleSheet(
+            f"color: {palette.ink_secondary}; background: transparent;"
+        )
 
 
 class _StatusDot(QWidget):

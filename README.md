@@ -46,8 +46,8 @@ Get-FileHash oXeioSync-setup.exe -Algorithm SHA256
 
 ![The dashboard](docs/screenshots/dashboard.png)
 
-*The dashboard: live throughput on a shared axis, a progress meter per folder,
-and the engine's own memory use. Sample folders on a scratch profile.*
+*The dashboard: live throughput on a shared axis, and folders ordered by what
+wants attention. Sample folders on a scratch profile.*
 
 ![The configuration page](docs/screenshots/configuration.png)
 
@@ -94,10 +94,14 @@ completions still work.*
 - Live throughput chart, sampled once a second: download and upload as two
   series on one shared axis, with a crosshair readout on hover
 - Stat tiles for current rates (with sparklines on a shared scale), bytes moved,
-  and peers online
-- A folder row per share: a progress meter, and beside it the state in words —
-  a percentage, `paused`, or a count of errors
-- A memory chart for the engine itself, and a peer list with per-device rates
+  peers online, and the engine's own memory use
+- The folders card is ordered by what wants attention, not by name. A folder
+  with errors, one mid-transfer, one scanning or one paused gets a row of its
+  own with the state in words and — where there is progress to show — a meter.
+  Everything that is up to date collapses into a dense three-column list of
+  name and size, under a count. Twenty healthy folders are four lines, and the
+  one that cannot write its files is the first thing in the card
+- A peer list with per-device rates
 - Dark throughout, and not by inverting a light theme: the surfaces, ink and
   series colours are a set chosen for a dark ground. Qt's own widgets — menus,
   dialogs, the tab bar — are given the same tokens, so the frame and the
