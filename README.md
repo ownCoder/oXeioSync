@@ -430,6 +430,7 @@ folders are independent and may run at the same time.
 
 | Path | |
 | --- | --- |
+| `CHANGELOG.md` | What changed and why, plus the gaps that are known and not yet fixed |
 | `oxeiosync/` | The application |
 | `oxeiosync/syncthing/` | Engine supervision: process, REST client, event feed, state model, 1 Hz sampler, binary download |
 | `oxeiosync/ui/` | Tray, dashboard, painted charts, embedded configuration page, settings |
@@ -654,7 +655,9 @@ gh release create v0.1.0 dist/oXeioSync-setup.exe --title "oXeioSync 0.1.0" --no
 ```
 
 The notes carry that digest, because an unsigned installer gives whoever
-downloads it nothing else to check it against.
+downloads it nothing else to check it against. [CHANGELOG.md](CHANGELOG.md) is
+where the notes come from; move its `Unreleased` section under the new version
+number as part of cutting the release.
 
 The version appears in three places that have to agree, none of which derive
 from the others: `APP_VERSION` in `oxeiosync/__init__.py`, `version` in
