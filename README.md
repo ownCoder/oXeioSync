@@ -72,8 +72,9 @@ Prefer to build it yourself? See [Building for macOS](#building-for-macos).
 
 *The dashboard: download and upload on one shared axis, and folders ordered by
 what wants attention — the paused one gets a row, the eleven that are fine get a
-name and a size. Twelve sample folders on an idle scratch profile, which is why
-the chart is flat and no peers are configured.*
+name and a size. The state itself is in the title bar and the status bar, so the
+page does not repeat it. Twelve sample folders on an idle scratch profile, which
+is why the chart is flat and no peers are configured.*
 
 ![The configuration page](docs/screenshots/configuration.png)
 

@@ -5,17 +5,22 @@ configuration surface, not a status one, and it carries its own branding. This
 page answers "is everything fine, and what is moving right now" using the
 application's own visual language.
 
-Layout, top to bottom: the one status line the view leads with, a row of stat
-tiles for the headline numbers, the live throughput chart, folder progress, and
-the peers. Each block answers a different question, so none of them is a chart
-for the sake of being one.
+Layout, top to bottom: a row of stat tiles for the headline numbers, the live
+throughput chart, the folders ordered by what wants attention, and the peers.
+Each block answers a different question, so none of them is a chart for the sake
+of being one.
+
+There is deliberately no status banner. The window title, the status bar and the
+tray tooltip all already say the same sentence, and the folders card says which
+folder and why — a fourth copy at the top of the page cost a whole card's height
+to repeat what three other places had covered.
 """
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QGridLayout,
@@ -27,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..syncthing.state import SyncStatus, SyncthingState
+from ..syncthing.state import SyncthingState
 from ..syncthing.transfer import TransferSample, TransferSampler
 from .charts import (
     Card,
@@ -36,7 +41,6 @@ from .charts import (
     StatTile,
     TimeSeriesChart,
     format_bytes,
-    format_duration,
     format_rate,
 )
 from .theme import Palette, palette_for
@@ -50,30 +54,6 @@ CHART_WINDOW = 120
 #: the width this card has, and a folder name to about twenty characters before
 #: it elides — long enough for the names people actually use.
 HEALTHY_COLUMNS = 3
-
-STATUS_HEADLINES = {
-    SyncStatus.STOPPED: "Not running",
-    SyncStatus.CONNECTING: "Connecting…",
-    SyncStatus.IDLE: "Up to date",
-    SyncStatus.SCANNING: "Scanning for changes",
-    SyncStatus.SYNCING: "Syncing",
-    SyncStatus.WARNING: "Some folders are out of sync",
-    SyncStatus.ERROR: "Something needs attention",
-}
-
-
-def status_color(palette: Palette, status: SyncStatus) -> str:
-    """Status colours are reserved for state and never reused as a series hue."""
-    return {
-        SyncStatus.STOPPED: palette.ink_muted,
-        SyncStatus.CONNECTING: palette.ink_muted,
-        SyncStatus.IDLE: palette.status_good,
-        SyncStatus.SCANNING: palette.series_download,
-        SyncStatus.SYNCING: palette.series_download,
-        SyncStatus.WARNING: palette.status_warning,
-        SyncStatus.ERROR: palette.status_critical,
-    }.get(status, palette.ink_muted)
-
 
 class DashboardPage(QScrollArea):
     """Scrollable dashboard bound to the state model and the transfer sampler."""
@@ -103,7 +83,6 @@ class DashboardPage(QScrollArea):
         layout.setContentsMargins(18, 16, 18, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(self._build_status_header())
         layout.addLayout(self._build_stat_row())
         layout.addWidget(self._build_transfer_card(), 1)
         layout.addWidget(self._build_folders_card())
@@ -112,53 +91,14 @@ class DashboardPage(QScrollArea):
 
         self.setWidget(body)
 
-        state.status_changed.connect(self._on_status_changed)
         state.changed.connect(self._refresh_from_state)
         sampler.sampled.connect(self._on_sample)
 
-        # Keep the relative clocks ("2h 14m") honest between samples.
-        self._tick = QTimer(self)
-        self._tick.setInterval(1000)
-        self._tick.timeout.connect(self._refresh_slow_text)
-        self._tick.start()
-
         self._apply_colors()
-        self._on_status_changed(state.status)
         self._refresh_from_state()
         self._ready = True
 
     # ------------------------------------------------------------------ build
-    def _build_status_header(self) -> QWidget:
-        card = Card(self)
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(12)
-
-        self._status_dot = _StatusDot(card)
-        layout.addWidget(self._status_dot)
-
-        text_column = QVBoxLayout()
-        text_column.setSpacing(1)
-
-        self._status_headline = QLabel("Starting up", card)
-        headline_font = QFont(self.font())
-        headline_font.setPointSizeF(headline_font.pointSizeF() + 7.0)
-        headline_font.setWeight(QFont.Weight.DemiBold)
-        self._status_headline.setFont(headline_font)
-
-        self._status_detail = QLabel("", card)
-        text_column.addWidget(self._status_headline)
-        text_column.addWidget(self._status_detail)
-        layout.addLayout(text_column)
-        layout.addStretch(1)
-
-        self._engine_label = QLabel("", card)
-        self._engine_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        layout.addWidget(self._engine_label)
-        return card
-
     def _build_stat_row(self) -> QHBoxLayout:
         palette = palette_for(self)
         row = QHBoxLayout()
@@ -280,41 +220,9 @@ class DashboardPage(QScrollArea):
         return card
 
     # ---------------------------------------------------------------- updating
-    def _on_status_changed(self, status: object) -> None:
-        if not isinstance(status, SyncStatus):
-            return
-        palette = palette_for(self)
-        self._status_headline.setText(STATUS_HEADLINES.get(status, "—"))
-        self._status_dot.set_color(status_color(palette, status))
-        self._status_headline.setStyleSheet(
-            f"color: {palette.ink}; background: transparent;"
-        )
-
     def _refresh_from_state(self) -> None:
-        snapshot = self._state.snapshot
-        self._engine_label.setText(
-            f"engine {snapshot.version}" if snapshot.version else ""
-        )
         self._rebuild_folders()
         self._rebuild_devices()
-        self._refresh_slow_text()
-
-    def _refresh_slow_text(self) -> None:
-        latest = self._sampler.latest()
-        folders = self._state.folders()
-        active = [f for f in folders if not f.paused]
-        behind = [f for f in active if f.completion < 100.0]
-
-        parts: list[str] = []
-        if behind:
-            worst = min(behind, key=lambda f: f.completion)
-            parts.append(f"{worst.display_name} at {worst.completion:.0f}%")
-        # Every folder, paused ones included: the card below counts them all,
-        # and two different totals on one screen means one of them is wrong.
-        parts.append(f"{len(folders)} folder{'s' if len(folders) != 1 else ''}")
-        if latest is not None and latest.uptime_seconds:
-            parts.append(f"running {format_duration(latest.uptime_seconds)}")
-        self._status_detail.setText(" · ".join(parts))
 
     def _on_sample(self, sample: object) -> None:
         if not isinstance(sample, TransferSample):
@@ -575,9 +483,6 @@ class DashboardPage(QScrollArea):
             f"QScrollArea > QWidget > QWidget {{ background: {palette.plane}; }}"
         )
         muted = f"color: {palette.ink_muted}; background: transparent;"
-        secondary = f"color: {palette.ink_secondary}; background: transparent;"
-        self._status_detail.setStyleSheet(secondary)
-        self._engine_label.setStyleSheet(muted)
         self._folders_summary.setStyleSheet(muted)
         self._healthy_heading.setStyleSheet(muted)
         self._folders_empty.setStyleSheet(muted)
