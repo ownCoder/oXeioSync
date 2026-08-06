@@ -12,9 +12,8 @@ import logging
 import time
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont, QKeySequence
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont, QKeySequence, QShowEvent
 from PySide6.QtWidgets import (
-    QApplication,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -37,10 +36,11 @@ log = logging.getLogger(__name__)
 
 DEFAULT_SIZE = (1024, 720)
 
-#: A gap of inactivity longer than this reads as the display having slept, after
-#: which the embedded web view is reloaded. Short focus changes stay under it, so
-#: an ordinary click away and back does not throw away the configuration page.
-WAKE_INACTIVITY_SECONDS = 10.0
+#: How often the heartbeat ticks, to notice the event loop being frozen by sleep.
+HEARTBEAT_INTERVAL_MS = 1000
+#: A heartbeat gap beyond this many seconds means the loop was frozen — the
+#: machine slept — rather than a mere scheduling hiccup.
+WAKE_GAP_SECONDS = 6.0
 
 
 class MainWindow(QMainWindow):
@@ -70,8 +70,14 @@ class MainWindow(QMainWindow):
         self._process_state = ProcessState.STOPPED
         #: Distinguishes "user closed the window" from "application is quitting".
         self._force_close = False
-        #: When the app first stopped being active, to tell a sleep from a blink.
-        self._went_inactive_at: float | None = None
+        #: Whether the window is meant to be on screen (vs hidden to the tray).
+        #: Qt's own hidden/minimised state desyncs across a macOS lid sleep — it
+        #: reports the still-on-screen window as hidden and minimised — so the
+        #: wake recovery trusts this instead of isHidden()/isMinimized().
+        self._intended_visible = False
+        #: Set when a sleep happened while the window was hidden to the tray, so
+        #: the surface is rebuilt when it is next brought back on screen.
+        self._pending_surface_rebuild = False
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
@@ -102,14 +108,19 @@ class MainWindow(QMainWindow):
         state.status_changed.connect(self._on_status_changed)
         state.connected.connect(self._web_view.reload_if_offline)
 
-        # Waking from sleep (a MacBook lid closed and reopened) can leave the
-        # window's content surface stale on macOS — the native title bar keeps
-        # painting, but the Qt content goes blank until something forces a
-        # redraw. Reasserting a repaint when the application becomes active again
-        # clears it; on an ordinary refocus it is a single invisible extra paint.
-        app = QApplication.instance()
-        if app is not None:
-            app.applicationStateChanged.connect(self._on_application_state_changed)
+        # A lid-close sleep on macOS can leave the whole window painting blank
+        # (Qt 6.11.1, QTBUG-147933: the native view's display lock is left held,
+        # so the content — the tab bar included — stops painting and no repaint
+        # recovers it; only rebuilding the view does). Such a sleep sends no
+        # application-state or activation signal, so wake is spotted by a
+        # heartbeat noticing a wall-clock jump: the event loop is frozen while the
+        # machine sleeps, so on wake the first tick is seconds late.
+        self._last_heartbeat = time.time()
+        self._heartbeat = QTimer(self)
+        self._heartbeat.setInterval(HEARTBEAT_INTERVAL_MS)
+        self._heartbeat.setTimerType(Qt.TimerType.VeryCoarseTimer)
+        self._heartbeat.timeout.connect(self._on_heartbeat)
+        self._heartbeat.start()
 
         self._on_status_changed(state.status)
 
@@ -145,6 +156,7 @@ class MainWindow(QMainWindow):
 
     def show_and_raise(self) -> None:
         """Bring the window up from wherever it currently is."""
+        self._intended_visible = True
         if self.isMinimized():
             self.showNormal()
         else:
@@ -276,6 +288,7 @@ class MainWindow(QMainWindow):
             return
 
         # Hide rather than quit: Syncthing keeps running in the background.
+        self._intended_visible = False
         self.hide()
         self.hidden_to_tray.emit()
 
@@ -289,60 +302,70 @@ class MainWindow(QMainWindow):
             # handler leaves the window manager mid-transition on Windows, which
             # can strand the taskbar button behind.
             QTimer.singleShot(0, self._hide_to_tray)
-        # Regaining window activation is a second, independent signal that we may
-        # be back from sleep — belt and braces for when the application-state
-        # signal does not fire.
-        if event.type() == QEvent.Type.ActivationChange:
-            if self.isActiveWindow():
-                self._on_became_active()
-            else:
-                self._note_inactive()
         super().changeEvent(event)
 
-    def _on_application_state_changed(self, state: object) -> None:
-        if state == Qt.ApplicationState.ApplicationActive:
-            self._on_became_active()
-        else:
-            self._note_inactive()
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        # If the machine slept while the window was hidden to the tray, its
+        # native surface is wedged; rebuild it now that it is back on screen.
+        if self._pending_surface_rebuild:
+            self._pending_surface_rebuild = False
+            QTimer.singleShot(0, self._recreate_surface)
 
-    def _note_inactive(self) -> None:
-        # Remember when the app first stopped being active, so that on the way
-        # back a long sleep can be told from a quick click away.
-        if self._went_inactive_at is None:
-            self._went_inactive_at = time.monotonic()
+    def _on_heartbeat(self) -> None:
+        now = time.time()
+        gap = now - self._last_heartbeat
+        self._last_heartbeat = now
+        # A gap far larger than the interval means the event loop was frozen,
+        # which on macOS means the machine slept. It has to be the wall clock
+        # (time.time): a monotonic clock also freezes across sleep and would hide
+        # the gap entirely.
+        if gap > WAKE_GAP_SECONDS:
+            log.info("Woke after ~%.0fs asleep (intended_visible=%s)", gap, self._intended_visible)
+            if self._intended_visible:
+                QTimer.singleShot(0, self._recreate_surface)
+            else:
+                # Hidden to the tray during the sleep — the surface is rebuilt
+                # when it is next brought back on screen (see showEvent), because
+                # rebuilding a window that is not on screen does nothing.
+                self._pending_surface_rebuild = True
 
-    def _on_became_active(self) -> None:
-        slept = (
-            self._went_inactive_at is not None
-            and time.monotonic() - self._went_inactive_at > WAKE_INACTIVITY_SECONDS
+    def _recreate_surface(self) -> None:
+        """Rebuild the native window to clear a wedged post-sleep surface.
+
+        Qt 6.11.1 leaves the macOS view's display lock held after a lid-close
+        sleep (QTBUG-147933): the whole content — the tab bar included — paints
+        blank, and repaint()/resize cannot help because they reuse the same
+        locked view. Hiding and re-showing the window builds a fresh view whose
+        lock is not held, so painting resumes.
+        """
+        # Only ever reached when the window is meant to be on screen — either it
+        # was visible across the sleep, or it has just been brought back from the
+        # tray (showEvent). Across a lid sleep Qt desyncs its own state (it
+        # reports the on-screen window as hidden AND minimised, and a minimised
+        # window is never painted — the blank), so isHidden()/isMinimized() are
+        # only logged here, never trusted for control flow.
+        log.info(
+            "Rebuilding surface (hidden=%s minimized=%s)",
+            self.isHidden(), self.isMinimized(),
         )
-        self._went_inactive_at = None
-        # Defer a beat so the compositor has settled: painting (or reloading) into
-        # a surface the window server is still re-creating does not always take.
-        QTimer.singleShot(50, self._force_redraw)
-        if slept:
-            # After a real sleep the embedded Chromium view can stay blank even
-            # once repainted — its render surface is gone — so reload it. Gated on
-            # a long gap so an ordinary refocus does not throw away the
-            # configuration page's scroll position or a half-filled dialog.
-            QTimer.singleShot(80, self._web_view.reload_after_wake)
-
-    def _force_redraw(self) -> None:
-        """Force the whole window to repaint, recovering a stale post-sleep surface."""
-        if not self.isVisible():
-            return
-        current = self._tabs.currentWidget()
-        if current is not None:
-            # A scroll area (the dashboard) paints through its viewport, so nudge
-            # that too, not only the frame around it.
-            viewport = getattr(current, "viewport", None)
-            if callable(viewport):
-                viewport().update()
-            current.update()
-        self._tabs.update()
-        self.repaint()
+        geometry = self.geometry()
+        # Destroy the wedged native view (and its held display lock), then show
+        # it back to a proper, un-minimised state, which builds a fresh view.
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.destroy()
+            log.info("Surface rebuild: native view destroyed")
+        self.showNormal()
+        self.setGeometry(geometry)
+        self.raise_()
+        self.activateWindow()
+        # The embedded Chromium view loses its own surface across the same sleep.
+        self._web_view.reload_after_wake()
+        log.info("Window surface rebuilt after wake")
 
     def _hide_to_tray(self) -> None:
+        self._intended_visible = False
         self.hide()
         self.hidden_to_tray.emit()
 
