@@ -156,6 +156,17 @@ def test_the_spec_refuses_to_build_without_an_engine():
     assert spec.index("a.datas += engine_datas") > spec.index("a.datas = [entry for entry")
 
 
+def test_the_bundled_engine_version_is_pinned():
+    """A floating engine version makes two builds of one tag ship different
+    engines; the pin in pyproject.toml is what keeps a release reproducible."""
+    build_exe = _load_tool("build_exe")
+
+    version = build_exe.pinned_engine_version()
+
+    assert version, "pyproject.toml [tool.oxeiosync] engine_version is not set"
+    assert version.startswith("v"), f"expected a release tag like v2.1.2, got {version!r}"
+
+
 # ------------------------------------------------------------ the vendor tool
 def test_engine_filename_follows_the_target_not_the_host():
     fetch = _load_tool("fetch_engine")

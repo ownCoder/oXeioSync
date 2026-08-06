@@ -1,2 +1,7 @@
-PySide6>=6.6
-requests>=2.31
+# Pinned exactly for reproducible bundles: the Qt version decides the whole
+# QtWebEngine payload, and packaging/oxeiosync.spec's trim rules key off exact
+# library names. Bump deliberately — and re-test the spec — rather than letting
+# it float. (Runtime deps carry lower bounds in pyproject.toml; this is the build
+# lock.)
+PySide6==6.11.1
+requests==2.34.2

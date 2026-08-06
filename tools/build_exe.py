@@ -98,6 +98,23 @@ def human(size: float) -> str:
     return f"{size:.1f} GiB"
 
 
+def pinned_engine_version() -> str | None:
+    """The Syncthing release the build pins to, from pyproject.toml.
+
+    Pinning keeps a given tag reproducible: without it the build vendors whatever
+    engine is 'latest' at build time, so two builds of the same source can ship
+    different engines.
+    """
+    import tomllib
+
+    try:
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data.get("tool", {}).get("oxeiosync", {}).get("engine_version")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clean", action="store_true", help="remove build/ and dist/ first")
@@ -133,10 +150,18 @@ def main(argv: list[str]) -> int:
         os.environ["OXEIOSYNC_ALLOW_NO_ENGINE"] = "1"
         print("== skipping the sync engine (--no-engine)")
     else:
-        print("== vendoring the sync engine")
+        version = args.engine_version or pinned_engine_version()
+        print("== vendoring the sync engine" + (f" (pinned {version})" if version else ""))
         command = [sys.executable, str(ROOT / "tools" / "fetch_engine.py")]
-        if args.engine_version:
-            command += ["--version", args.engine_version]
+        if version:
+            command += ["--version", version]
+        else:
+            print(
+                "WARNING: no engine version pinned (set tool.oxeiosync.engine_version "
+                "in pyproject.toml) and none given; vendoring the latest release, "
+                "which is not reproducible.",
+                file=sys.stderr,
+            )
         if run(command):
             print(
                 "Could not vendor a sync engine. Fetch one by hand and pass it to\n"

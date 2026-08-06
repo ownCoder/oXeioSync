@@ -29,6 +29,13 @@ include = ["oxeiosync*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.oxeiosync]
+# The Syncthing release the bundled engine is pinned to, so every build of a
+# given tag ships the same engine rather than whatever was "latest" at build
+# time. tools/build_exe.py passes this to tools/fetch_engine.py; the
+# --engine-version flag overrides it. Bump deliberately.
+engine_version = "v2.1.2"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
