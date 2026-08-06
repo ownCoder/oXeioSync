@@ -17,7 +17,7 @@ code talks to; the application's own interface deliberately does not — see*
 
 [![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
-![tests](https://img.shields.io/badge/tests-264-brightgreen)
+![tests](https://img.shields.io/badge/tests-265-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
 [![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
 
@@ -104,6 +104,9 @@ completions still work.*
   changing the GUI address in Settings still ends in a clean stop
 - Picks a free GUI port on first run if the default 8384 is already taken, which
   it very often is when another Syncthing or SyncTrayzor is installed
+- On a quick restart, waits out the previous engine's port release with a short
+  auto-retry instead of giving up, so a transient clash recovers on its own
+  rather than leaving the engine stopped
 
 **Tray icon**
 - Colour carries the status: green up to date, blue working, amber out of sync,
@@ -728,7 +731,7 @@ defaults, so that command is the check this project actually means — and it
 passes. Qt's camelCase overrides are exempted by name, with a comment saying
 why.
 
-264 unit tests (3 skipped), and they need neither a display nor a network — everything they
+265 unit tests (3 skipped), and they need neither a display nor a network — everything they
 touch is either pure logic or stubbed. They cover config parsing and its
 tolerance of bad input, bind-address handling and port probing, overall-status
 derivation, event folding, the restart-backoff and fatal-failure rules, rate
@@ -849,6 +852,16 @@ build did exactly that and produced an executable that started, did nothing, and
 said nothing. `packaging/entry.py` imports the package by name instead, which
 gives those imports the parent they need. `OXEIOSYNC_BUILD_CONSOLE=1` exists for
 the same reason: a windowed bundle cannot tell you why it failed.
+
+**Why the macOS window is rebuilt after the machine sleeps.** Qt 6.11.1 has a bug
+(QTBUG-147933): a macOS display going offline — a MacBook lid closing, or the
+screen sleeping — leaves the window's native view holding a lock it never
+releases, so the whole content paints blank while the native title bar stays
+fine, and no `repaint()` recovers it. Until a fixed Qt ships, the window watches
+for the three things that can mean it happened — a heartbeat noticing the event
+loop was frozen (a system sleep), the screen configuration changing (a display
+sleep), and the window being brought back from the tray — and rebuilds the native
+view (destroy and re-show), which is the only thing that clears the stuck lock.
 
 **Start on login from a source checkout.** Neither the Windows `Run` key nor the
 macOS LaunchAgent controls the working directory, so a bare `-m oxeiosync` would
