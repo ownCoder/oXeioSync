@@ -1,0 +1,15 @@
+# The working tree may hold CRLF line endings — a cloud-sync tool round-trips
+# files through Windows and flips them — but the repository stores LF. text=auto
+# makes git normalize on the fly, so that churn stops showing up as "modified"
+# and diffs stay about real changes.
+* text=auto eol=lf
+
+# Binary assets — never normalize these.
+*.png  binary
+*.ico  binary
+*.icns binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.dmg  binary
+*.zip  binary
