@@ -220,6 +220,17 @@ class SyncthingWebView(QWidget):
         if self._showing_placeholder:
             self.load_syncthing()
 
+    def reload_after_wake(self) -> None:
+        """Reload the live page after the machine has slept.
+
+        Chromium's render surface can be lost across a display sleep — a MacBook
+        lid closed and reopened — leaving the view blank until it reloads. A
+        placeholder (the engine is down) is left alone: reloading it would only
+        re-show the same placeholder.
+        """
+        if not self._showing_placeholder:
+            self.load_syncthing()
+
     def show_placeholder(self, message: str) -> None:
         """Replace the view with a plain 'not available yet' page."""
         self._showing_placeholder = True

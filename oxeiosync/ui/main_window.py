@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont, QKeySequence
@@ -35,6 +36,11 @@ from .web_view import SyncthingWebView
 log = logging.getLogger(__name__)
 
 DEFAULT_SIZE = (1024, 720)
+
+#: A gap of inactivity longer than this reads as the display having slept, after
+#: which the embedded web view is reloaded. Short focus changes stay under it, so
+#: an ordinary click away and back does not throw away the configuration page.
+WAKE_INACTIVITY_SECONDS = 10.0
 
 
 class MainWindow(QMainWindow):
@@ -64,6 +70,8 @@ class MainWindow(QMainWindow):
         self._process_state = ProcessState.STOPPED
         #: Distinguishes "user closed the window" from "application is quitting".
         self._force_close = False
+        #: When the app first stopped being active, to tell a sleep from a blink.
+        self._went_inactive_at: float | None = None
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
@@ -281,18 +289,43 @@ class MainWindow(QMainWindow):
             # handler leaves the window manager mid-transition on Windows, which
             # can strand the taskbar button behind.
             QTimer.singleShot(0, self._hide_to_tray)
-        # A blank surface after sleep also clears the moment the user clicks back
-        # into the window, so repaint on regaining activation too — belt and
-        # braces for the case where the application-state signal did not fire.
-        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
-            QTimer.singleShot(50, self._force_redraw)
+        # Regaining window activation is a second, independent signal that we may
+        # be back from sleep — belt and braces for when the application-state
+        # signal does not fire.
+        if event.type() == QEvent.Type.ActivationChange:
+            if self.isActiveWindow():
+                self._on_became_active()
+            else:
+                self._note_inactive()
         super().changeEvent(event)
 
     def _on_application_state_changed(self, state: object) -> None:
         if state == Qt.ApplicationState.ApplicationActive:
-            # Defer a beat so the compositor has settled: repainting into a
-            # surface the window server is still re-creating does not always take.
-            QTimer.singleShot(50, self._force_redraw)
+            self._on_became_active()
+        else:
+            self._note_inactive()
+
+    def _note_inactive(self) -> None:
+        # Remember when the app first stopped being active, so that on the way
+        # back a long sleep can be told from a quick click away.
+        if self._went_inactive_at is None:
+            self._went_inactive_at = time.monotonic()
+
+    def _on_became_active(self) -> None:
+        slept = (
+            self._went_inactive_at is not None
+            and time.monotonic() - self._went_inactive_at > WAKE_INACTIVITY_SECONDS
+        )
+        self._went_inactive_at = None
+        # Defer a beat so the compositor has settled: painting (or reloading) into
+        # a surface the window server is still re-creating does not always take.
+        QTimer.singleShot(50, self._force_redraw)
+        if slept:
+            # After a real sleep the embedded Chromium view can stay blank even
+            # once repainted — its render surface is gone — so reload it. Gated on
+            # a long gap so an ordinary refocus does not throw away the
+            # configuration page's scroll position or a half-filled dialog.
+            QTimer.singleShot(80, self._web_view.reload_after_wake)
 
     def _force_redraw(self) -> None:
         """Force the whole window to repaint, recovering a stale post-sleep surface."""
