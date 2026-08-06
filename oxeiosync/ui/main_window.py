@@ -12,7 +12,14 @@ import logging
 import time
 
 from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont, QKeySequence, QShowEvent
+from PySide6.QtGui import (
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QGuiApplication,
+    QKeySequence,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
@@ -39,8 +46,10 @@ DEFAULT_SIZE = (1024, 720)
 #: How often the heartbeat ticks, to notice the event loop being frozen by sleep.
 HEARTBEAT_INTERVAL_MS = 1000
 #: A heartbeat gap beyond this many seconds means the loop was frozen — the
-#: machine slept — rather than a mere scheduling hiccup.
-WAKE_GAP_SECONDS = 6.0
+#: machine slept — rather than a mere scheduling hiccup. Kept low so a short lid
+#: close is caught too; the recovery it triggers is harmless when it was not
+#: actually needed.
+WAKE_GAP_SECONDS = 3.0
 
 
 class MainWindow(QMainWindow):
@@ -121,6 +130,16 @@ class MainWindow(QMainWindow):
         self._heartbeat.setTimerType(Qt.TimerType.VeryCoarseTimer)
         self._heartbeat.timeout.connect(self._on_heartbeat)
         self._heartbeat.start()
+
+        # A display sleeping (screen off / a brief lid close) wedges the same
+        # native view but does NOT suspend the process, so the heartbeat above
+        # cannot see it. The screen going offline/online does fire these signals,
+        # so treat them as another wake signal.
+        gui = QGuiApplication.instance()
+        if gui is not None:
+            gui.screenAdded.connect(self._on_screen_changed)
+            gui.screenRemoved.connect(self._on_screen_changed)
+            gui.primaryScreenChanged.connect(self._on_screen_changed)
 
         self._on_status_changed(state.status)
 
@@ -289,6 +308,7 @@ class MainWindow(QMainWindow):
 
         # Hide rather than quit: Syncthing keeps running in the background.
         self._intended_visible = False
+        self._pending_surface_rebuild = True
         self.hide()
         self.hidden_to_tray.emit()
 
@@ -306,8 +326,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
-        # If the machine slept while the window was hidden to the tray, its
-        # native surface is wedged; rebuild it now that it is back on screen.
+        # Anything that could have wedged the native view while the window was
+        # away (a display or the machine sleeping) set this on hide; rebuild now
+        # that it is back on screen.
         if self._pending_surface_rebuild:
             self._pending_surface_rebuild = False
             QTimer.singleShot(0, self._recreate_surface)
@@ -321,7 +342,7 @@ class MainWindow(QMainWindow):
         # (time.time): a monotonic clock also freezes across sleep and would hide
         # the gap entirely.
         if gap > WAKE_GAP_SECONDS:
-            log.info("Woke after ~%.0fs asleep (intended_visible=%s)", gap, self._intended_visible)
+            log.info("Woke after ~%.0fs asleep", gap)
             if self._intended_visible:
                 QTimer.singleShot(0, self._recreate_surface)
             else:
@@ -329,6 +350,16 @@ class MainWindow(QMainWindow):
                 # when it is next brought back on screen (see showEvent), because
                 # rebuilding a window that is not on screen does nothing.
                 self._pending_surface_rebuild = True
+
+    def _on_screen_changed(self, *_args: object) -> None:
+        # A display going offline/online (screen sleep, lid, monitor change) can
+        # wedge the native view without suspending the process, so recover the
+        # same way a wake does.
+        log.info("Display configuration changed (intended_visible=%s)", self._intended_visible)
+        if self._intended_visible:
+            QTimer.singleShot(0, self._recreate_surface)
+        else:
+            self._pending_surface_rebuild = True
 
     def _recreate_surface(self) -> None:
         """Rebuild the native window to clear a wedged post-sleep surface.
@@ -342,30 +373,30 @@ class MainWindow(QMainWindow):
         # Only ever reached when the window is meant to be on screen — either it
         # was visible across the sleep, or it has just been brought back from the
         # tray (showEvent). Across a lid sleep Qt desyncs its own state (it
-        # reports the on-screen window as hidden AND minimised, and a minimised
+        # reports the on-screen window as hidden and minimised, and a minimised
         # window is never painted — the blank), so isHidden()/isMinimized() are
-        # only logged here, never trusted for control flow.
-        log.info(
-            "Rebuilding surface (hidden=%s minimized=%s)",
-            self.isHidden(), self.isMinimized(),
-        )
+        # not trusted for control flow here.
         geometry = self.geometry()
         # Destroy the wedged native view (and its held display lock), then show
         # it back to a proper, un-minimised state, which builds a fresh view.
         handle = self.windowHandle()
         if handle is not None:
             handle.destroy()
-            log.info("Surface rebuild: native view destroyed")
         self.showNormal()
         self.setGeometry(geometry)
         self.raise_()
         self.activateWindow()
         # The embedded Chromium view loses its own surface across the same sleep.
         self._web_view.reload_after_wake()
-        log.info("Window surface rebuilt after wake")
+        log.info("Rebuilt the window surface")
 
     def _hide_to_tray(self) -> None:
         self._intended_visible = False
+        # Rebuild the surface when it next comes back on screen: a screen or the
+        # machine sleeping while hidden wedges the native view, and that is not
+        # reliably signalled, so recover unconditionally on the next show. A
+        # rebuild that turns out not to have been needed costs only a brief flash.
+        self._pending_surface_rebuild = True
         self.hide()
         self.hidden_to_tray.emit()
 
