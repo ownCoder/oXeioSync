@@ -6,8 +6,19 @@ import argparse
 import hashlib
 import logging
 import logging.handlers
+import os
 import sys
 import time
+
+# The embedded configuration view (Chromium) can come back blank after the
+# machine sleeps — a MacBook lid closed and reopened — because its GPU
+# compositing surface is lost on sleep and not re-created on wake. Disabling GPU
+# compositing for this one embedded view sidesteps that; the configuration page
+# is static enough that hardware compositing buys it nothing worth a blank
+# window. This must be set before QtWebEngine initialises, which the import just
+# below triggers, so it lives above every Qt import. `setdefault` leaves an
+# explicit override from the environment untouched.
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
 
 # QtWebEngine has to be imported before a QApplication exists, or the embedded
 # browser fails to initialise. Keep this above every other Qt import.

@@ -10,9 +10,10 @@ from __future__ import annotations
 import base64
 import logging
 
-from PySide6.QtCore import QByteArray, QEvent, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QFont, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -92,6 +93,15 @@ class MainWindow(QMainWindow):
 
         state.status_changed.connect(self._on_status_changed)
         state.connected.connect(self._web_view.reload_if_offline)
+
+        # Waking from sleep (a MacBook lid closed and reopened) can leave the
+        # window's content surface stale on macOS — the native title bar keeps
+        # painting, but the Qt content goes blank until something forces a
+        # redraw. Reasserting a repaint when the application becomes active again
+        # clears it; on an ordinary refocus it is a single invisible extra paint.
+        app = QApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_application_state_changed)
 
         self._on_status_changed(state.status)
 
@@ -271,7 +281,33 @@ class MainWindow(QMainWindow):
             # handler leaves the window manager mid-transition on Windows, which
             # can strand the taskbar button behind.
             QTimer.singleShot(0, self._hide_to_tray)
+        # A blank surface after sleep also clears the moment the user clicks back
+        # into the window, so repaint on regaining activation too — belt and
+        # braces for the case where the application-state signal did not fire.
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            QTimer.singleShot(50, self._force_redraw)
         super().changeEvent(event)
+
+    def _on_application_state_changed(self, state: object) -> None:
+        if state == Qt.ApplicationState.ApplicationActive:
+            # Defer a beat so the compositor has settled: repainting into a
+            # surface the window server is still re-creating does not always take.
+            QTimer.singleShot(50, self._force_redraw)
+
+    def _force_redraw(self) -> None:
+        """Force the whole window to repaint, recovering a stale post-sleep surface."""
+        if not self.isVisible():
+            return
+        current = self._tabs.currentWidget()
+        if current is not None:
+            # A scroll area (the dashboard) paints through its viewport, so nudge
+            # that too, not only the frame around it.
+            viewport = getattr(current, "viewport", None)
+            if callable(viewport):
+                viewport().update()
+            current.update()
+        self._tabs.update()
+        self.repaint()
 
     def _hide_to_tray(self) -> None:
         self.hide()
