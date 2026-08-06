@@ -37,9 +37,18 @@ log = logging.getLogger(__name__)
 
 #: Delay before each successive restart attempt, in seconds.
 RESTART_DELAYS = (1, 2, 5, 15, 30)
-#: How many times to wait out a busy GUI port before calling it a conflict.
-#: A restart briefly overlaps with the old listener, and that is not an error.
+#: How many quick attempts to wait out a busy GUI port before switching to
+#: slower auto-retries. A restart briefly overlaps with the old listener, and
+#: that is not an error.
 PORT_WAIT_ATTEMPTS = 3
+#: Delay between the quick attempts, in milliseconds.
+PORT_WAIT_INTERVAL_MS = 1000
+#: After the quick attempts, keep retrying at this slower cadence so a transient
+#: clash — a restart racing the previous engine's port release — recovers on its
+#: own instead of leaving the engine stopped until a manual start.
+PORT_RETRY_INTERVAL_MS = 5000
+#: How many slow retries before a still-busy port is finally called a conflict.
+PORT_RETRY_ATTEMPTS = 12
 #: Log fragments that mean the failure is permanent and retrying is pointless.
 FATAL_LOG_MARKERS = (
     "Failed to start API",
@@ -152,14 +161,35 @@ class SyncthingProcess(QObject):
         # exiting, so check it here where we can explain the problem.
         host, port = split_bind_address(self._config.gui_address)
         if not is_port_available(host, port):
-            if self._port_wait_attempt < PORT_WAIT_ATTEMPTS:
-                self._port_wait_attempt += 1
+            self._port_wait_attempt += 1
+            where = join_bind_address(host, port)
+            if self._port_wait_attempt <= PORT_WAIT_ATTEMPTS:
+                # Quick retries: a port freed by a just-stopped engine usually
+                # comes back within a second or two.
                 self._append_log(
-                    f"[oXeioSync] {join_bind_address(host, port)} is still busy; "
-                    f"waiting (attempt {self._port_wait_attempt})"
+                    f"[oXeioSync] {where} is still busy; waiting "
+                    f"(attempt {self._port_wait_attempt})"
                 )
-                QTimer.singleShot(1000, self.start)
+                QTimer.singleShot(PORT_WAIT_INTERVAL_MS, self.start)
                 return
+            if self._port_wait_attempt <= PORT_WAIT_ATTEMPTS + PORT_RETRY_ATTEMPTS:
+                # Slower auto-retry, so a transient clash — a quick restart racing
+                # the previous engine's port release — recovers on its own rather
+                # than leaving the engine stopped until a manual start. Said once,
+                # so it does not nag the log every few seconds.
+                if self._port_wait_attempt == PORT_WAIT_ATTEMPTS + 1:
+                    log.info(
+                        "%s still busy; retrying every %.0fs until it frees",
+                        where, PORT_RETRY_INTERVAL_MS / 1000,
+                    )
+                    self._append_log(
+                        f"[oXeioSync] {where} still busy; retrying automatically "
+                        "until it frees"
+                    )
+                QTimer.singleShot(PORT_RETRY_INTERVAL_MS, self.start)
+                return
+            # Still taken after the whole window: a real conflict — very often
+            # another sync client — not a slow release.
             self._port_wait_attempt = 0
             self._restart_attempt = 0
             self._fail(describe_port_conflict(host, port))

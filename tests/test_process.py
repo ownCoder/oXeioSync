@@ -17,6 +17,8 @@ from oxeiosync.config import Config
 from oxeiosync.syncthing import process as process_module
 from oxeiosync.syncthing.process import (
     FATAL_LOG_MARKERS,
+    PORT_RETRY_ATTEMPTS,
+    PORT_WAIT_ATTEMPTS,
     RESTART_DELAYS,
     STABLE_UPTIME,
     ProcessState,
@@ -141,6 +143,45 @@ def test_a_fatal_log_line_stops_the_restart_loop(supervisor, marker):
     assert len(errors) == 1
     assert marker in errors[0]
     assert supervisor._restart_attempt == 0
+
+
+def test_a_busy_gui_port_auto_retries_before_it_is_called_a_conflict(
+    supervisor, monkeypatch, tmp_path
+):
+    """A quick restart racing the previous engine's port release must recover on
+    its own, not leave the engine stopped after a few seconds of trying."""
+    monkeypatch.setattr(process_module, "is_port_available", lambda *a, **k: False)
+    monkeypatch.setattr(
+        process_module, "find_syncthing", lambda *a, **k: tmp_path / "syncthing"
+    )
+
+    scheduled = []
+
+    class _Timer:
+        @staticmethod
+        def singleShot(_ms, callback):  # noqa: N802 - matches QTimer's API
+            scheduled.append(callback)
+
+    monkeypatch.setattr(process_module, "QTimer", _Timer)
+
+    errors = []
+    supervisor.error.connect(errors.append)
+
+    supervisor.start()
+    # A busy port schedules a retry rather than failing straight away.
+    assert errors == []
+    assert scheduled
+
+    # Drive the retry chain to its end.
+    drives = 0
+    while scheduled and not errors and drives < 100:
+        drives += 1
+        scheduled.pop(0)()
+
+    # It kept trying well past the quick attempts, then reported the conflict.
+    assert drives > PORT_WAIT_ATTEMPTS
+    assert drives >= PORT_WAIT_ATTEMPTS + PORT_RETRY_ATTEMPTS - 1
+    assert errors and "already listening" in errors[0]
 
 
 def test_an_ordinary_crash_schedules_a_retry(supervisor):
