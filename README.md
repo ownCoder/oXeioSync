@@ -17,7 +17,7 @@ code talks to; the application's own interface deliberately does not — see*
 
 [![release](https://img.shields.io/github/v/release/ownCoder/oXeioSync)](https://github.com/ownCoder/oXeioSync/releases/latest)
 ![status](https://img.shields.io/badge/status-working-brightgreen)
-![tests](https://img.shields.io/badge/tests-265-brightgreen)
+![tests](https://img.shields.io/badge/tests-266-brightgreen)
 ![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
 [![licence](https://img.shields.io/github/license/ownCoder/oXeioSync)](LICENSE)
 
@@ -531,9 +531,12 @@ drivers, and that is the failure mode hardest to diagnose from a distance.
 ### The bundled engine
 
 `tools/fetch_engine.py` puts an engine in `build\vendor\<os>-<arch>\`, and the
-spec bundles it from there into `_internal\`. `build_exe.py` runs it for you; run
-it directly to pin a version or to vendor one on a machine that cannot reach
-GitHub:
+spec bundles it from there into `_internal\`. `build_exe.py` runs it for you,
+pinned to the version in `pyproject.toml` (`[tool.oxeiosync] engine_version`), so
+every build of a given source ships the same engine rather than whatever was
+"latest" that day. Run `fetch_engine.py` directly — or `build_exe.py
+--engine-version` — to vendor a different version, or to vendor one on a machine
+that cannot reach GitHub:
 
 ```bash
 .venv\Scripts\python.exe tools\fetch_engine.py --version v2.1.2
@@ -551,6 +554,11 @@ digest to check it against unless you pass `--allow-unverified` and mean it.
 It writes an `engine.json` manifest beside the binary, so a second build reuses
 what is already there, and notices if the vendored file stops matching what the
 manifest says it is.
+
+Between that pinned engine and the exactly-pinned build dependencies in
+`requirements.txt` (`PySide6==`, `requests==`), one source tree builds the same
+bundle every time: the Qt version alone decides the whole QtWebEngine payload and
+the trims the spec makes against it, so it is not left to float.
 
 Both the spec and the installer script **fail the build** when no engine is
 present, rather than quietly producing something that needs the network on first
@@ -731,7 +739,11 @@ defaults, so that command is the check this project actually means — and it
 passes. Qt's camelCase overrides are exempted by name, with a comment saying
 why.
 
-265 unit tests (3 skipped), and they need neither a display nor a network — everything they
+Line endings are normalised to LF by `.gitattributes` (`* text=auto eol=lf`), so
+a checkout kept in a folder that rewrites them — a cloud-sync client that
+round-trips files through Windows, say — does not report every file as modified.
+
+266 unit tests (3 skipped), and they need neither a display nor a network — everything they
 touch is either pure logic or stubbed. They cover config parsing and its
 tolerance of bad input, bind-address handling and port probing, overall-status
 derivation, event folding, the restart-backoff and fatal-failure rules, rate
