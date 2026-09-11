@@ -138,6 +138,15 @@ completions still work.*
   dashboard inside it are the same dark
 
 **Window**
+- A **Recent** tab, between the dashboard and the configuration page: the
+  images that changed most recently in any shared folder, as a grid of
+  thumbnails, newest first — made here or pulled in from another device. Each
+  shows its name, its folder and how long ago; double-click opens the file, and
+  its menu can show it in the file manager. A file re-exported forty times is
+  one tile that moves to the front. It is built from the engine's own record of
+  file changes rather than a scan of the folders, so it costs nothing to keep
+  current — and it shows what the engine still remembers, its most recent
+  changes, rather than the folders' whole history
 - The engine's own configuration screen is embedded via QtWebEngine one tab
   away, with the API key injected on every request so it is authorised even when
   a password is set
@@ -436,7 +445,7 @@ folders are independent and may run at the same time.
 | `CHANGELOG.md` | What changed and why, plus the gaps that are known and not yet fixed |
 | `oxeiosync/` | The application |
 | `oxeiosync/syncthing/` | Engine supervision: process, REST client, event feed, state model, 1 Hz sampler, binary download |
-| `oxeiosync/ui/` | Tray, dashboard, painted charts, embedded configuration page, settings |
+| `oxeiosync/ui/` | Tray, dashboard, recent images, painted charts, embedded configuration page, settings |
 | `docs/screenshots/` | The images used above |
 | `tests/` | Unit tests — no display or network needed |
 | `tests/test_naming.py` | Guards the rule that the interface never names the upstream project |

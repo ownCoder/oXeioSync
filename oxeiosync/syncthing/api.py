@@ -210,11 +210,30 @@ class SyncthingApi:
         nothing happened. Pass ``limit=1`` on the first call to learn the
         current event ID without replaying Syncthing's whole backlog.
         """
+        return self._events("/rest/events", since, limit, timeout)
+
+    def disk_events(
+        self,
+        since: int = 0,
+        limit: int | None = None,
+        timeout: float = EVENT_POLL_TIMEOUT,
+    ) -> list[dict[str, Any]]:
+        """Long-poll the file-change feed: files added, modified and deleted.
+
+        A separate stream from :meth:`events`, which leaves these out. With
+        ``since=0`` and a ``limit`` it returns the newest changes the engine
+        still remembers, and ``timeout=0`` returns at once rather than holding.
+        """
+        return self._events("/rest/events/disk", since, limit, timeout)
+
+    def _events(
+        self, path: str, since: int, limit: int | None, timeout: float
+    ) -> list[dict[str, Any]]:
         # The read timeout must outlast the server-side hold, or every quiet
         # poll would surface as a connection error.
         payload = self._request(
             "GET",
-            "/rest/events",
+            path,
             params={
                 k: v
                 for k, v in {"since": since, "limit": limit, "timeout": int(timeout)}.items()

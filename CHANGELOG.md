@@ -8,6 +8,36 @@ the detail.
 
 Everything below is on `main` and built, but not tagged.
 
+### Recent images
+
+A **Recent** tab between Dashboard and Configuration shows the images that
+changed most recently in the shared folders — PNG, JPEG, GIF, WebP and BMP — as
+a grid of thumbnails, newest first, whether the change was made here or pulled
+in from a peer. Double-click opens a file; its menu shows it in the file manager.
+
+It reads the engine's file-change feed (`/rest/events/disk`) on a second event
+poller, which, unlike the general one, replays what the engine still remembers
+on connecting, so the tab opens full rather than empty. A dropped connection to
+the same engine resumes where it left off rather than replaying over what the
+tab already holds, and its live polls are uncapped: the engine keeps only the
+newest `limit` events, so a cap silently lost the rest of any burst. The feed is
+noisy — one export run reported a thousand changes to the same hundred artboards
+in a few minutes — so each file is kept once, at its latest change; deletions
+remove it; everything that is not an image is dropped; and the grid redraws at
+most every 400 ms however fast changes arrive.
+
+Thumbnails decode on two worker threads, because an artboard is thousands of
+pixels a side. They are cached per file, not per change: a re-exported file keeps
+its last picture until the new one is ready, at most one decode per file waits
+at a time, and only tiles on screen ask — a tile with no picture yet ahead of
+one that is only being refreshed — so the work waiting never outgrows a
+screenful however fast files change. A file reported by a folder and by another
+folder shared inside it is one tile, not two taking turns redecoding it. A
+changed file that will not decode keeps its old picture for two seconds, in
+case the export was still being written, and then says "No preview" rather than
+passing the old picture off as the new one. Quitting hides the window, drops
+what has not started, and waits only for the decodes already running.
+
 ### The version counts itself
 
 The version was typed into three files and none of them had changed since

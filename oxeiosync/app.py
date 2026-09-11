@@ -9,6 +9,7 @@ of the application, which keeps the interesting logic testable in isolation.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
@@ -21,6 +22,8 @@ from .syncthing import binary
 from .syncthing.api import SyncthingApi, SyncthingApiError
 from .syncthing.events import EventPoller
 from .syncthing.process import ProcessState, SyncthingProcess
+from .syncthing.recent import BACKLOG as RECENT_BACKLOG
+from .syncthing.recent import RecentFiles
 from .syncthing.state import SyncthingState
 from .syncthing.transfer import TransferSampler
 from .ui import icons
@@ -61,10 +64,17 @@ class Application(QObject):
         self._state = SyncthingState(self._config, self)
         self._process = SyncthingProcess(self._config, self)
         self._poller = EventPoller(self._config.gui_url(), self._config.api_key, self)
+        # A second feed, for file changes, which the general one leaves out. It
+        # replays what the engine remembers, because the Recent tab shows history.
+        self._disk_poller = EventPoller(
+            self._config.gui_url(), self._config.api_key, self,
+            disk=True, backlog=RECENT_BACKLOG,
+        )
         self._sampler = TransferSampler(self._config, self)
+        self._recent = RecentFiles(self)
 
         self._tray = TrayIcon(self._state, self)
-        self._window = MainWindow(self._config, self._state, self._sampler, None)
+        self._window = MainWindow(self._config, self._state, self._sampler, self._recent, None)
         self._window.set_log(self._process.log_tail())
 
         self._wire()
@@ -110,6 +120,7 @@ class Application(QObject):
 
         autostart.sync_with_config(self._config.start_on_login)
         self._poller.start()
+        self._disk_poller.start()
 
         if self._config.start_syncthing_automatically:
             # Defer past the first event-loop turn so the window is painted
@@ -153,6 +164,10 @@ class Application(QObject):
         self._poller.event_received.connect(self._state.handle_event)
         self._poller.connected.connect(self._state.refresh)
 
+        # --- file changes -> recent images
+        self._disk_poller.backlog_received.connect(self._recent.reset)
+        self._disk_poller.event_received.connect(self._recent.add)
+
         # --- state -> notifications
         self._state.connected.connect(self._on_api_connected)
         self._state.folder_sync_finished.connect(self._on_folder_synced)
@@ -189,6 +204,10 @@ class Application(QObject):
         self._tray.set_process_state(state)
         self._window.set_process_state(state)
         self._state.set_process_running(running)
+        if not running:
+            # The engine's memory of changes goes with it; a stopped engine's
+            # list would otherwise linger as if it were current.
+            self._recent.clear()
 
         # Sampling only makes sense while there is an engine to sample; its
         # rate baseline is discarded on stop so the first reading after a
@@ -281,6 +300,7 @@ class Application(QObject):
 
         if needs_restart:
             self._poller.reconfigure(self._config.gui_url(), self._config.api_key)
+            self._disk_poller.reconfigure(self._config.gui_url(), self._config.api_key)
             self._sampler.reconfigure(self._config.gui_url(), self._config.api_key)
             self._sampler.clear()
             self._window.reconfigure(self._config)
@@ -298,16 +318,25 @@ class Application(QObject):
         self._window.prepare_for_quit()
         self._window.close()
         self._tray.hide()
+        # Off screen now, so a thumbnail still decoding holds up nothing visible.
+        if not self._window.wait_for_background_work(2000):
+            log.warning("Thumbnail decoding did not finish in time")
 
         self._poller.stop()
+        self._disk_poller.stop()
         self._sampler.stop()
         self._state.stop()
 
         self._process.shutdown_blocking()
 
-        # The poller can be mid-request; give it a moment to unwind cleanly.
-        if not self._poller.wait(5000):
-            log.warning("Event poller did not stop in time")
+        # The pollers can be mid-request; give them a moment to unwind cleanly.
+        # One deadline for both, not one each: two pollers held in a long poll
+        # would otherwise double the wait.
+        deadline = time.monotonic() + 5.0
+        for poller in (self._poller, self._disk_poller):
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            if not poller.wait(remaining):
+                log.warning("Event poller did not stop in time")
 
         config_module.save(self._config)
         self._qapp.quit()

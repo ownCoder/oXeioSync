@@ -32,10 +32,12 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, APP_VERSION
 from ..config import Config
 from ..syncthing.process import ProcessState
+from ..syncthing.recent import RecentFiles
 from ..syncthing.state import SyncStatus, SyncthingState
 from ..syncthing.transfer import TransferSampler
 from . import icons
 from .dashboard import DashboardPage
+from .recent import RecentPage
 from .tray import STATUS_LABELS
 from .web_view import SyncthingWebView
 
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         config: Config,
         state: SyncthingState,
         sampler: TransferSampler,
+        recent: RecentFiles,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -93,14 +96,17 @@ class MainWindow(QMainWindow):
         self.resize(*DEFAULT_SIZE)
 
         self._dashboard = DashboardPage(state, sampler, self)
+        self._recent = RecentPage(state, recent, self)
         self._web_view = SyncthingWebView(config.gui_url(), config.api_key, self)
         self._log_view = _LogView(config.log_lines_kept, self)
 
         self._tabs = QTabWidget(self)
         # The dashboard leads: it is this application's own view of the sync.
-        # The engine's configuration screen is a tab away for the things only it
-        # can do — adding folders and pairing devices.
+        # Recent sits beside it as the other view of what happened; the engine's
+        # configuration screen comes after, for the things only it can do —
+        # adding folders and pairing devices.
         self._tabs.addTab(self._dashboard, "Dashboard")
+        self._tabs.addTab(self._recent, "Recent")
         self._tabs.addTab(self._web_view, "Configuration")
         self._tabs.addTab(self._log_view, "Log")
         # Stated explicitly rather than relying on the default: the web view
@@ -187,6 +193,17 @@ class MainWindow(QMainWindow):
         """Persist state and allow the next close to actually close."""
         self._force_close = True
         self._save_geometry()
+        # Drops the thumbnails not yet started; without it the pool would decode
+        # every one of them at teardown, for a window that is already gone.
+        self._recent.shutdown()
+
+    def wait_for_background_work(self, msecs: int) -> bool:
+        """After prepare_for_quit: wait for work already in flight to finish.
+
+        Separate so it can run once the window is off screen — a window left
+        up, frozen, while a large image finishes decoding reads as a hang.
+        """
+        return self._recent.wait_for_thumbnails(msecs)
 
     # -------------------------------------------------------------------- menus
     def _build_menus(self) -> None:
