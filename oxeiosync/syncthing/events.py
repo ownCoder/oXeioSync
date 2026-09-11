@@ -111,7 +111,8 @@ class EventPoller(QThread):
             started = ""
             try:
                 if replaying:
-                    started = str((self._api.system_status() or {}).get("startTime") or "")
+                    status = self._api.system_status()
+                    started = str(status.get("startTime") or "") if isinstance(status, dict) else ""
                     # Everything remembered, at once: timeout=0 answers
                     # immediately even when there is nothing to answer with.
                     events = poll(since=0, limit=self._backlog, timeout=0)

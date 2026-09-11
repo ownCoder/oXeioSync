@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 import time
 
 # The embedded configuration view (Chromium) can come back blank after the
@@ -217,6 +218,12 @@ def _install_excepthook() -> None:
         if issubclass(exc_type, KeyboardInterrupt):
             return
         log.critical("Unhandled exception", exc_info=(exc_type, exc, traceback))
+        # A dialog is a widget, and widgets live on the GUI thread only. Built
+        # from a worker thread — an event poller, the sampler — it takes the
+        # whole process down, which turned one bad response into a crash. From
+        # a worker, the log is the report.
+        if threading.current_thread() is not threading.main_thread():
+            return
         if QApplication.instance() is not None:
             QMessageBox.critical(
                 None,

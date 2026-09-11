@@ -117,8 +117,16 @@ class SyncthingApi:
             return None
         try:
             return response.json()
-        except ValueError:
-            return response.text
+        except ValueError as exc:
+            # Every endpoint called here answers in JSON, so anything else means
+            # the engine is not itself yet: while it migrates its database on
+            # start it serves a stand-in page on this address for a few seconds.
+            # Handing that text back let three worker threads call .get() on a
+            # string at once, and the resulting error dialogs took the whole
+            # application down.
+            raise SyncthingUnavailableError(
+                f"{method} {path}: the sync engine is not ready yet"
+            ) from exc
 
     def _get(self, path: str, **params: Any) -> Any:
         # Drop unset optional query parameters rather than sending "None".
@@ -241,7 +249,11 @@ class SyncthingApi:
             },
             timeout=timeout + DEFAULT_TIMEOUT,
         )
-        return payload or []
+        if payload is None:
+            return []
+        if not isinstance(payload, list):
+            raise SyncthingUnavailableError(f"GET {path}: the sync engine is not ready yet")
+        return [event for event in payload if isinstance(event, dict)]
 
 
 def normalise_gui_address(address: str) -> str:

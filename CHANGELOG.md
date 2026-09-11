@@ -8,6 +8,20 @@ the detail.
 
 Everything below is on `main` and built, but not tagged.
 
+### No crash while the engine migrates its database
+
+For a few seconds on start, while it migrates its database, the engine serves a
+stand-in page on its API address. The REST client handed that text back as if it
+were the JSON it had asked for; the transfer sampler and both event pollers each
+called `.get()` on a string, and the exception hook opened an error dialog from
+each of those worker threads. A widget built off the GUI thread takes the whole
+process down, so the application died and left its engine running without it.
+
+The client now treats a non-JSON answer as the engine not being ready — the
+same error every caller already retries on — and an event feed that is not a
+list of events likewise. The exception hook logs errors from worker threads and
+keeps its dialog for the GUI thread.
+
 ### Recent images
 
 A **Recent** tab between Dashboard and Configuration shows the images that

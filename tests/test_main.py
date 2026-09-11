@@ -57,6 +57,49 @@ def log_dir(tmp_path, monkeypatch):
     return target
 
 
+@pytest.fixture
+def excepthook(monkeypatch):
+    """The installed hook, with its dialog recorded instead of shown."""
+    dialogs = []
+    monkeypatch.setattr(entry.sys, "excepthook", entry.sys.excepthook)
+    monkeypatch.setattr(entry.QMessageBox, "critical", lambda *args: dialogs.append(args))
+    entry._install_excepthook()
+    return entry.sys.excepthook, dialogs
+
+
+def _raise_into(hook) -> None:
+    try:
+        raise AttributeError("'str' object has no attribute 'get'")
+    except AttributeError as exc:
+        hook(type(exc), exc, exc.__traceback__)
+
+
+def test_an_error_on_a_worker_thread_is_logged_without_a_dialog(excepthook, caplog):
+    """A widget built off the GUI thread takes the whole process down.
+
+    Three event threads hit one bad engine response at once and each asked for
+    an error dialog from its own thread; the application died.
+    """
+    import threading
+
+    hook, dialogs = excepthook
+    worker = threading.Thread(target=_raise_into, args=(hook,))
+    with caplog.at_level(logging.CRITICAL):
+        worker.start()
+        worker.join()
+
+    assert dialogs == []
+    assert "Unhandled exception" in caplog.text
+
+
+def test_an_error_on_the_gui_thread_still_gets_its_dialog(excepthook):
+    hook, dialogs = excepthook
+
+    _raise_into(hook)
+
+    assert len(dialogs) == 1
+
+
 def test_logging_writes_to_a_file(clean_root_logger, log_dir):
     entry.setup_logging(verbose=False)
     logging.getLogger("test").info("hello")
