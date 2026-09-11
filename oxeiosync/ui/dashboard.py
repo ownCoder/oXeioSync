@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QGridLayout,
@@ -54,6 +54,13 @@ CHART_WINDOW = 120
 #: the width this card has, and a folder name to about twenty characters before
 #: it elides — long enough for the names people actually use.
 HEALTHY_COLUMNS = 3
+
+#: Grid cells per up-to-date folder: dot, name, size, and the gap after it.
+HEALTHY_CELLS = 4
+
+#: The least room between one folder's size and the next folder's dot — enough
+#: that the gap between folders always reads wider than the one inside a folder.
+HEALTHY_GAP = 32
 
 class DashboardPage(QScrollArea):
     """Scrollable dashboard bound to the state model and the transfer sampler."""
@@ -178,14 +185,20 @@ class DashboardPage(QScrollArea):
         self._healthy_heading = QLabel("", card)
         layout.addWidget(self._healthy_heading)
 
-        # Three columns of (dot, name, size). Wide enough to read, narrow
+        # Three columns of (dot, name, size, gap). Wide enough to read, narrow
         # enough that twenty folders are four rows rather than twenty.
+        #
+        # The spare width goes into the gap *after* each size, never into the
+        # name. Stretching the name pushed its size a few hundred pixels away
+        # while the next folder's dot sat a dozen pixels beyond it, so every
+        # size read as belonging to the folder on its right.
         self._folders_grid = QGridLayout()
         self._folders_grid.setHorizontalSpacing(10)
         self._folders_grid.setVerticalSpacing(4)
         for column in range(HEALTHY_COLUMNS):
-            self._folders_grid.setColumnStretch(column * 3 + 1, 4)
-            self._folders_grid.setColumnStretch(column * 3 + 2, 2)
+            gap = column * HEALTHY_CELLS + 3
+            self._folders_grid.setColumnStretch(gap, 1)
+            self._folders_grid.setColumnMinimumWidth(gap, HEALTHY_GAP)
         layout.addLayout(self._folders_grid)
 
         self._folders_empty = QLabel("No folders yet — add one in Configuration.", card)
@@ -386,9 +399,10 @@ class DashboardPage(QScrollArea):
             name = QLabel(self._body)
             size = QLabel(self._body)
             size.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self._folders_grid.addWidget(dot, row, column * 3)
-            self._folders_grid.addWidget(name, row, column * 3 + 1)
-            self._folders_grid.addWidget(size, row, column * 3 + 2)
+            first = column * HEALTHY_CELLS
+            self._folders_grid.addWidget(dot, row, first)
+            self._folders_grid.addWidget(name, row, first + 1)
+            self._folders_grid.addWidget(size, row, first + 2)
             self._healthy_rows.append((dot, name, size))
 
         for index, (dot, name, size) in enumerate(self._healthy_rows):
@@ -531,9 +545,11 @@ class _AttentionRow(QWidget):
     neither, and is the shortest row on the card.
     """
 
+    RADIUS = 8.0
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._ground = ""
+        self._ground: QColor | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 9, 12, 10)
@@ -621,12 +637,27 @@ class _AttentionRow(QWidget):
         self._paint(palette, palette.ink_muted)
 
     def _paint(self, palette: Palette, hue: str) -> None:
-        self._ground = palette.qcolor(hue, 0.10).name(QColor.NameFormat.HexArgb)
-        self.setStyleSheet(f"background: {self._ground}; border-radius: 8px;")
+        self._ground = palette.qcolor(hue, 0.10)
         self._name.setStyleSheet(f"color: {palette.ink}; background: transparent;")
         self._message.setStyleSheet(
             f"color: {palette.ink_secondary}; background: transparent;"
         )
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        # Painted, as Card is. A stylesheet background on a plain QWidget is
+        # silently ignored without WA_StyledBackground, which is how this tint
+        # once shipped invisible — the row band byte-identical to the card.
+        if self._ground is None:
+            return
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._ground)
+            painter.drawRoundedRect(QRectF(self.rect()), self.RADIUS, self.RADIUS)
+        finally:
+            painter.end()
 
 
 class _StatusDot(QWidget):

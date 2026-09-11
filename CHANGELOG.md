@@ -89,6 +89,15 @@ Everything up to date collapses into a three-column list of name and size under
 a count — twenty healthy folders in four lines instead of twenty, and the size
 is a fact the old row never showed.
 
+Two things the design review measured kept that from showing on screen, and
+both are fixed. The attention row's tint never painted — it was set by
+stylesheet on a plain `QWidget`, which Qt ignores, so the row was byte-identical
+to the card; it is now painted the way `Card` is. And the up-to-date grid gave
+its spare width to the name column, which put "Aman" hundreds of pixels from its
+own size and a dozen from the next folder's dot; the spare width now goes in a
+gap after each size. Both are pinned by tests that render the card offscreen and
+measure it, and that fail against the old code.
+
 Memory moved up into the stat tile row. One number and its trend did not need
 two fifths of the width beside the folders.
 
@@ -124,24 +133,17 @@ around it.
 ## Known gaps
 
 Recorded rather than fixed, so they are not rediscovered from scratch. The
-design review that found the first two is in
+design review that found the first one is in
 `.impeccable/critique/2026-07-28T05-22-51Z__oxeiosync-ui-dashboard-py.md`.
 
-- **The attention row's background does not render.** `_AttentionRow` sets its
-  tint through a stylesheet on a plain `QWidget`, which Qt honours only with
-  `WA_StyledBackground` set or a `paintEvent` that draws it. Measured from a
-  screenshot: the row band is byte-identical to the card surface. The device
-  that makes a folder in trouble read as a contained, urgent object is invisible.
-- **The healthy grid binds each size to the wrong folder.** A name ends 372px
-  from its own size and 13px from the next folder's dot. Gestalt proximity at
-  28:1 is not ambiguous, it is wrong.
 - **Three state colours fail WCAG AA on their own grounds**: the error pill at
   3.2:1, the syncing pill at 3.8:1, the up-to-date chip at 4.35:1, against a
   4.5:1 bar at that size.
 - **Uptime is no longer shown anywhere.** It lived only in the removed status
   banner.
-- **`_sort_folders` is tested; the rendering is not.** Every issue above lives
-  in the untested half.
+- **Only part of the rendering is tested.** The row ground and the grid's
+  proximity are now measured from a real render; colour contrast and the
+  chips agreeing with the rows are not.
 
 ## 0.1.0
 
