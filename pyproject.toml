@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxeiosync"
-version = "0.1.0"
+# Counted from git (last release tag + commits since), never typed in: see
+# oxeiosync/version.py.
+dynamic = ["version"]
 description = "A tray application that hosts and wraps Syncthing, making it behave like a native desktop app."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,6 +27,9 @@ oxeiosync = "oxeiosync.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["oxeiosync*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "oxeiosync.APP_VERSION" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

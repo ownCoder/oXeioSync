@@ -115,6 +115,28 @@ def pinned_engine_version() -> str | None:
     return data.get("tool", {}).get("oxeiosync", {}).get("engine_version")
 
 
+def warn_if_uncommitted() -> None:
+    """Say so when the build is about to carry a number it does not own.
+
+    The version is counted from commits, so a build of uncommitted changes gets
+    the same number as the last commit while containing something else. Worth
+    knowing before that installer goes anywhere; not worth refusing to build.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=str(ROOT), capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return  # no git; the spec says what that means for the version
+    if result.returncode == 0 and result.stdout.strip():
+        print(
+            "WARNING: uncommitted changes. This build takes the last commit's version\n"
+            "number but does not match that commit; commit first for a number of its own.",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clean", action="store_true", help="remove build/ and dist/ first")
@@ -138,6 +160,8 @@ def main(argv: list[str]) -> int:
     if not SPEC.is_file():
         print(f"missing spec file: {SPEC}", file=sys.stderr)
         return 1
+
+    warn_if_uncommitted()
 
     if args.clean:
         for path in (BUILD, DIST):

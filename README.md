@@ -662,7 +662,7 @@ Then take the digest and cut the release:
 ```
 
 ```bash
-gh release create v0.1.0 dist/oXeioSync-setup.exe --title "oXeioSync 0.1.0" --notes-file notes.md
+gh release create v0.1.23 dist/oXeioSync-setup.exe --title "oXeioSync 0.1.23" --notes-file notes.md
 ```
 
 The notes carry that digest, because an unsigned installer gives whoever
@@ -670,11 +670,29 @@ downloads it nothing else to check it against. [CHANGELOG.md](CHANGELOG.md) is
 where the notes come from; move its `Unreleased` section under the new version
 number as part of cutting the release.
 
-The version appears in three places that have to agree, none of which derive
-from the others: `APP_VERSION` in `oxeiosync/__init__.py`, `version` in
-`pyproject.toml`, and the four `vers` fields in `packaging/version_info.txt` —
-which is where the installer reads it from, since Inno Setup takes
-`AppVersion` out of the built executable's own resources.
+There is no version number to bump. It is counted from git: the last release
+tag gives major, minor and patch, and every commit since adds one to the patch —
+`v0.1.0` plus 23 commits is `0.1.23`, and the next commit is `0.1.24`. So every
+build of a new commit carries a higher number than the one before, with nothing
+to remember. See what the current commit is:
+
+```bash
+.venv\Scripts\python.exe -m oxeiosync --version
+```
+
+Tag the release with exactly that number (`v0.1.23`), so the tag and the build
+agree. To start a new line, tag it — `git tag v0.2.0` — and the count starts
+again from there.
+
+The build resolves the number once and stamps it everywhere it is read: the
+Windows version resource (which is where Inno Setup takes `AppVersion` from),
+the macOS `Info.plist`, and an `oxeiosync-version.txt` inside the bundle, which
+is how a frozen copy with no git knows its own number. `pyproject.toml` reads
+the same count, so `pip install -e .` agrees with the build. A build with no tag to count from fails rather than
+shipping a number that could collide with a real one; set
+`OXEIOSYNC_VERSION=1.2.3` to build from a source archive with no history. A
+build of uncommitted changes warns: it takes the last commit's number without
+matching that commit.
 
 ## Building for macOS
 

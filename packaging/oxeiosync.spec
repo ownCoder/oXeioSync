@@ -41,13 +41,24 @@ WITH_CONSOLE = os.environ.get("OXEIOSYNC_BUILD_CONSOLE") == "1"
 BUILD_NAME = f"{APP_NAME}-console" if WITH_CONSOLE else APP_NAME
 
 # --- version resource, so Explorer's Properties tab is not blank -------------
-version_line = next(
-    line for line in (ROOT / "oxeiosync" / "__init__.py").read_text(encoding="utf-8").splitlines()
-    if line.startswith("APP_VERSION")
-)
-APP_VERSION = version_line.split("=", 1)[1].strip().strip('"').strip("'")
-_parts = (APP_VERSION.split(".") + ["0", "0", "0", "0"])[:4]
-VERSION_TUPLE = tuple(int(p) if p.isdigit() else 0 for p in _parts)
+sys.path.insert(0, str(ROOT))
+from oxeiosync import version as app_version  # noqa: E402
+
+# Counted from git — the last release tag plus the commits since — so every
+# commit builds a higher number with nothing to bump. OXEIOSYNC_VERSION overrides
+# it for a build made where there is no history to count (a source archive).
+APP_VERSION = os.environ.get("OXEIOSYNC_VERSION") or app_version.from_git(ROOT)
+if not APP_VERSION:
+    raise SystemExit(
+        "Could not work out the version: no release tag (v1.2.3) is reachable from\n"
+        "this commit, or git is not available. Fetch the tags (git fetch --tags), or\n"
+        "set OXEIOSYNC_VERSION=1.2.3 to build without history."
+    )
+VERSION_TUPLE = app_version.as_tuple(APP_VERSION)
+print(f"spec: version {APP_VERSION}")
+
+# The bundle has no git to count with, so it is told the number instead.
+VERSION_STAMP = WORK_DIR / app_version.STAMP_NAME
 
 # Written into the build directory, not the source tree: a spec should not leave
 # generated files behind next to the code. Windows-only: it is a Win32 version
@@ -55,6 +66,7 @@ VERSION_TUPLE = tuple(int(p) if p.isdigit() else 0 for p in _parts)
 # from the Info.plist assembled for the BUNDLE at the end of this file instead.
 VERSION_FILE = WORK_DIR / "version_info.txt"
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+VERSION_STAMP.write_text(APP_VERSION, encoding="utf-8")
 VERSION_FILE.write_text(
     f"""VSVersionInfo(
   ffi=FixedFileInfo(
@@ -84,7 +96,6 @@ VERSION_FILE.write_text(
 # Imported rather than reimplemented: the mapping from this machine to a release
 # asset name lives in the application, and a build that guessed it differently
 # would vendor one engine and ship another.
-sys.path.insert(0, str(ROOT))
 from oxeiosync.syncthing.binary import platform_asset_infix  # noqa: E402
 
 ENGINE_ARCH = os.environ.get("OXEIOSYNC_ENGINE_ARCH") or platform_asset_infix()
@@ -260,6 +271,7 @@ print(
 # somebody else's executable and should arrive byte for byte as published —
 # which is also what its licence asks of anyone who redistributes it.
 a.datas += engine_datas
+a.datas.append((app_version.STAMP_NAME, str(VERSION_STAMP), "DATA"))
 
 pyz = PYZ(a.pure)  # noqa: F821
 

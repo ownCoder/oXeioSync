@@ -6,9 +6,23 @@ the detail.
 
 ## Unreleased
 
-Everything below is on `main` and built, but not tagged. `APP_VERSION` is still
-`0.1.0` in all three places the [release notes](README.md#publishing-a-release)
-list — bump those before cutting this.
+Everything below is on `main` and built, but not tagged.
+
+### The version counts itself
+
+The version was typed into three files and none of them had changed since
+0.1.0, so twenty-three commits later every build — and every installer made from
+one — still called itself 0.1.0. An upgrade looked identical to what it
+replaced.
+
+It is no longer written anywhere. The last release tag gives major, minor and
+patch, and each commit since adds one to the patch: `v0.1.0` plus 23 commits is
+`0.1.23`. Every commit is a higher number with nothing to bump; a new line is
+started by tagging it. The build stamps the number into the exe's version
+resource, the macOS `Info.plist` and the bundle itself, and refuses to build
+when there is no tag to count from rather than shipping a guess. The unused
+`packaging/version_info.txt` is gone — the spec has generated its own for some
+time. See [Publishing a release](README.md#publishing-a-release).
 
 ### The installer now carries the sync engine
 
