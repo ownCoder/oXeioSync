@@ -19,7 +19,7 @@ from . import APP_NAME, autostart, paths
 from . import config as config_module
 from .net import find_free_port, is_port_available, join_bind_address, split_bind_address
 from .syncthing import binary
-from .syncthing.api import SyncthingApi, SyncthingApiError
+from .syncthing.api import EVENT_POLL_TIMEOUT, SyncthingApi, SyncthingApiError
 from .syncthing.events import EventPoller
 from .syncthing.process import ProcessState, SyncthingProcess
 from .syncthing.recent import BACKLOG as RECENT_BACKLOG
@@ -34,6 +34,10 @@ from .ui.tray import TrayIcon
 
 log = logging.getLogger(__name__)
 
+#: Seconds allowed on top of one poll's hold for the pollers to finish on quit:
+#: the request itself, and the thread waking up to notice it was told to stop.
+POLLER_STOP_MARGIN = 2.0
+
 
 class Application(QObject):
     """The running application."""
@@ -42,6 +46,9 @@ class Application(QObject):
         super().__init__()
         self._qapp = qapp
         self._quitting = False
+        #: Background threads quit() could not see finish, by name. Read by
+        #: main() after the event loop ends: a live QThread must not be torn down.
+        self.unfinished_threads: list[str] = []
         #: The "still running in the tray" hint is shown at most once per run.
         self._explained_tray = False
 
@@ -315,6 +322,12 @@ class Application(QObject):
         self._quitting = True
         log.info("Shutting down")
 
+        # Told first, because telling them is all that can be done: a poll in
+        # flight only ends when the engine answers it, and it may as well run
+        # out while the rest of the shutdown goes on.
+        self._poller.stop()
+        self._disk_poller.stop()
+
         self._window.prepare_for_quit()
         self._window.close()
         self._tray.hide()
@@ -322,21 +335,20 @@ class Application(QObject):
         if not self._window.wait_for_background_work(2000):
             log.warning("Thumbnail decoding did not finish in time")
 
-        self._poller.stop()
-        self._disk_poller.stop()
         self._sampler.stop()
         self._state.stop()
 
         self._process.shutdown_blocking()
 
-        # The pollers can be mid-request; give them a moment to unwind cleanly.
-        # One deadline for both, not one each: two pollers held in a long poll
-        # would otherwise double the wait.
-        deadline = time.monotonic() + 5.0
-        for poller in (self._poller, self._disk_poller):
+        # One deadline for both pollers, long enough for a poll that has just
+        # started to run its course. A poller still running past it is named,
+        # so main() can leave without destroying a live thread.
+        deadline = time.monotonic() + EVENT_POLL_TIMEOUT + POLLER_STOP_MARGIN
+        for name, poller in (("events", self._poller), ("file changes", self._disk_poller)):
             remaining = max(0, int((deadline - time.monotonic()) * 1000))
             if not poller.wait(remaining):
-                log.warning("Event poller did not stop in time")
+                log.warning("Event poller (%s) did not stop in time", name)
+                self.unfinished_threads.append(f"event poller ({name})")
 
         config_module.save(self._config)
         self._qapp.quit()

@@ -21,7 +21,15 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10.0
 #: How long the server holds an event request open before returning empty.
-EVENT_POLL_TIMEOUT = 55.0
+#:
+#: Short, because it is also how long a poller takes to notice it has been told
+#: to stop: a request blocked in a read cannot be broken off from another thread
+#: on Windows — shutting the socket down does not wake it. At 55 seconds, quit
+#: gave up waiting and the interpreter destroyed QThreads that were still
+#: running, which Qt answers by aborting the process. A few seconds costs one
+#: cheap loopback request per poller in that time, next to the transfer
+#: sampler's one a second.
+EVENT_POLL_TIMEOUT = 3.0
 
 
 class SyncthingApiError(Exception):

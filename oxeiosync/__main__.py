@@ -283,11 +283,29 @@ def main(argv: list[str] | None = None) -> int:
         QTimer.singleShot(0, application.start)
 
         try:
-            return qapp.exec()
+            code = qapp.exec()
         finally:
             server.close()
     finally:
         lock.release()
+    return _leave(code, application.unfinished_threads)
+
+
+def _leave(code: int, unfinished: list[str]) -> int:
+    """Return *code* the ordinary way, unless a thread would outlive teardown.
+
+    On the way out Python destroys the objects the application owns, and
+    destroying a QThread that is still running makes Qt abort the process —
+    0xC0000409 on Windows, which is the exit code a script or the installer then
+    sees for a quit that otherwise went fine. By this point everything that
+    matters is done: the engine has been stopped, the settings saved, the lock
+    released. So in that one case, skip the teardown rather than crash in it.
+    """
+    if not unfinished:
+        return code
+    log.warning("Leaving without teardown; still running: %s", ", ".join(unfinished))
+    logging.shutdown()
+    os._exit(code)
 
 
 if __name__ == "__main__":

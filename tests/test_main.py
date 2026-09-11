@@ -100,6 +100,33 @@ def test_an_error_on_the_gui_thread_still_gets_its_dialog(excepthook):
     assert len(dialogs) == 1
 
 
+@pytest.fixture
+def leaving(monkeypatch):
+    """Record os._exit and logging.shutdown instead of doing either."""
+    calls = []
+
+    def fake_exit(code):
+        calls.append(("os._exit", code))
+        raise SystemExit(code)
+
+    monkeypatch.setattr(entry.os, "_exit", fake_exit)
+    monkeypatch.setattr(entry.logging, "shutdown", lambda: calls.append(("logging.shutdown",)))
+    return calls
+
+
+def test_a_clean_quit_returns_its_code_the_ordinary_way(leaving):
+    assert entry._leave(0, []) == 0
+    assert leaving == []
+
+
+def test_a_thread_outliving_quit_skips_the_teardown_that_would_crash(leaving):
+    """Destroying a running QThread aborts the process; skipping it does not."""
+    with pytest.raises(SystemExit):
+        entry._leave(0, ["event poller (events)"])
+
+    assert leaving == [("logging.shutdown",), ("os._exit", 0)]
+
+
 def test_logging_writes_to_a_file(clean_root_logger, log_dir):
     entry.setup_logging(verbose=False)
     logging.getLogger("test").info("hello")

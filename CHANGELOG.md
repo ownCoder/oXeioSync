@@ -8,6 +8,24 @@ the detail.
 
 Everything below is on `main` and built, but not tagged.
 
+### No crash on quit
+
+Quitting could end in a crash, exit code 0xC0000409. Each event poller held a
+55-second long poll, and a request blocked in a read cannot be broken off from
+another thread on Windows — shutting its socket down does not wake it. So a
+poller only stopped when the engine answered, quit gave up after five seconds,
+and the interpreter then destroyed QThreads that were still running, which Qt
+answers by aborting the process. It showed whenever the application was not
+the one stopping the engine (an engine run separately, or already gone), since
+stopping it is what otherwise ends the polls early. It predates the Recent tab;
+the second poller only doubled the wait.
+
+The engine now holds each event request for three seconds, so a poller told to
+stop is done within one of those; the pollers are told first thing on quit, and
+waited for against a deadline that covers a whole hold. If a thread still
+outlives that, the application leaves without the interpreter's teardown —
+everything that matters is finished by then — instead of crashing in it.
+
 ### No crash while the engine migrates its database
 
 For a few seconds on start, while it migrates its database, the engine serves a
