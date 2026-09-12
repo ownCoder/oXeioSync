@@ -20,6 +20,7 @@ indefinitely.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -28,7 +29,7 @@ from typing import Any
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from ..config import Config
-from .api import SyncthingApi, SyncthingApiError
+from .api import SyncthingApi, SyncthingApiError, SyncthingUnavailableError
 
 log = logging.getLogger(__name__)
 
@@ -177,13 +178,19 @@ class SyncthingState(QObject):
         self._heartbeat.start()
         self._take_snapshot()
 
-    def stop(self) -> None:
-        """Stop refreshing and wait for any in-flight snapshot."""
+    def stop(self) -> bool:
+        """Stop refreshing and wait for any in-flight snapshot; False if it outlives the wait.
+
+        The answer matters when quitting: a thread still running when the
+        interpreter tears down makes Qt abort the process.
+        """
         self._heartbeat.stop()
         self._debounce.stop()
-        if self._worker is not None:
-            self._worker.wait(5000)
-            self._worker = None
+        worker, self._worker = self._worker, None
+        if worker is None:
+            return True
+        worker.stop()
+        return worker.wait(5000)
 
     def set_process_running(self, running: bool) -> None:
         """Tell the model whether the Syncthing process is meant to be up.
@@ -474,6 +481,10 @@ def _apply_folder_summary(folder: FolderState, summary: dict[str, Any]) -> None:
         folder.completion = min(100.0, 100.0 * synced / folder.global_bytes)
 
 
+class _StoppedError(Exception):
+    """A snapshot abandoned because nobody is waiting for it any more."""
+
+
 class _SnapshotWorker(QThread):
     """Reads the whole of Syncthing's state with blocking REST calls."""
 
@@ -483,10 +494,17 @@ class _SnapshotWorker(QThread):
     def __init__(self, base_url: str, api_key: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._api = SyncthingApi(base_url, api_key)
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        """Abandon the snapshot at the next folder. Does not block."""
+        self._stop.set()
 
     def run(self) -> None:  # noqa: D102 - QThread entry point
         try:
             snapshot = self._read()
+        except _StoppedError:
+            pass
         except SyncthingApiError as exc:
             self.failed.emit(str(exc))
         else:
@@ -520,6 +538,8 @@ class _SnapshotWorker(QThread):
             )
 
         for entry in config.get("folders") or []:
+            if self._stop.is_set():
+                raise _StoppedError
             folder_id = str(entry.get("id", ""))
             if not folder_id:
                 continue
@@ -530,9 +550,14 @@ class _SnapshotWorker(QThread):
                 paused=bool(entry.get("paused")),
             )
             if not folder.paused:
-                # A folder can disappear between the config read and this call.
+                # A folder can disappear between the config read and this call,
+                # and is skipped. An engine that has stopped answering is not one
+                # folder's problem: every folder left would wait out a timeout of
+                # its own, keeping this thread alive long past a quit.
                 try:
                     _apply_folder_summary(folder, self._api.folder_status(folder_id))
+                except SyncthingUnavailableError:
+                    raise
                 except SyncthingApiError as exc:
                     log.debug("No status for folder %s: %s", folder_id, exc)
             snapshot.folders[folder_id] = folder

@@ -15,16 +15,23 @@ Quitting could end in a crash, exit code 0xC0000409. Each event poller held a
 another thread on Windows — shutting its socket down does not wake it. So a
 poller only stopped when the engine answered, quit gave up after five seconds,
 and the interpreter then destroyed QThreads that were still running, which Qt
-answers by aborting the process. It showed whenever the application was not
-the one stopping the engine (an engine run separately, or already gone), since
-stopping it is what otherwise ends the polls early. It predates the Recent tab;
-the second poller only doubled the wait.
+answers by aborting the process. It showed whenever the engine was one the
+application had not started itself, since stopping its own engine is what
+otherwise ends the polls early. It predates the Recent tab. The same abort was
+waiting behind two other threads nothing accounted for: a snapshot midway
+through its folders when the engine stopped answering, which took a timeout per
+folder left, and a first-run download stuck on an unresponsive network.
 
 The engine now holds each event request for three seconds, so a poller told to
 stop is done within one of those; the pollers are told first thing on quit, and
-waited for against a deadline that covers a whole hold. If a thread still
-outlives that, the application leaves without the interpreter's teardown —
-everything that matters is finished by then — instead of crashing in it.
+waited for against a deadline that covers a whole hold. Only the hold got
+shorter: a request still has about a minute to be answered before it counts as
+failed, because a poller that gives up loses the events in the gap, and the
+notifications with them. A snapshot now stops between folders when told to, and
+gives up at the first folder the engine no longer answers for. And if any
+background thread still outlives quitting — found by walking the object tree,
+not from a list — the application leaves without the interpreter's teardown,
+everything it owns being finished by then, instead of crashing in it.
 
 ### No crash while the engine migrates its database
 

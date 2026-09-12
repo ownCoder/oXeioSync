@@ -5,8 +5,8 @@ poll on a worker thread and re-emits everything as Qt signals, so the GUI
 thread only ever sees already-parsed dictionaries.
 
 The poller owns its own :class:`~oxeiosync.syncthing.api.SyncthingApi`
-instance: a 55-second poll would otherwise monopolise the connection pool that
-ordinary API calls share.
+instance: long polls held open back to back would otherwise monopolise the
+connection pool that ordinary API calls share.
 """
 
 from __future__ import annotations

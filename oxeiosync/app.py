@@ -12,7 +12,7 @@ import logging
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QThread, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from . import APP_NAME, autostart, paths
@@ -37,6 +37,26 @@ log = logging.getLogger(__name__)
 #: Seconds allowed on top of one poll's hold for the pollers to finish on quit:
 #: the request itself, and the thread waking up to notice it was told to stop.
 POLLER_STOP_MARGIN = 2.0
+#: How long quit() waits for the pollers, all told: a whole hold, so a poll that
+#: has only just begun can run its course, plus the margin.
+POLLER_STOP_DEADLINE = EVENT_POLL_TIMEOUT + POLLER_STOP_MARGIN
+
+
+def running_threads(*roots: QObject | None) -> list[str]:
+    """The kinds of QThread under *roots* that are still running.
+
+    Found by walking the object tree rather than from a list of known workers:
+    a poller, a snapshot, a download started from a dialog on the window — a
+    worker added later cannot be missed by forgetting to register it.
+    """
+    names = []
+    for root in roots:
+        if root is None:
+            continue
+        names.extend(
+            type(thread).__name__ for thread in root.findChildren(QThread) if thread.isRunning()
+        )
+    return names
 
 
 class Application(QObject):
@@ -336,14 +356,16 @@ class Application(QObject):
             log.warning("Thumbnail decoding did not finish in time")
 
         self._sampler.stop()
-        self._state.stop()
+        if not self._state.stop():
+            log.warning("The snapshot worker did not stop in time")
+            self.unfinished_threads.append("snapshot worker")
 
         self._process.shutdown_blocking()
 
         # One deadline for both pollers, long enough for a poll that has just
         # started to run its course. A poller still running past it is named,
         # so main() can leave without destroying a live thread.
-        deadline = time.monotonic() + EVENT_POLL_TIMEOUT + POLLER_STOP_MARGIN
+        deadline = time.monotonic() + POLLER_STOP_DEADLINE
         for name, poller in (("events", self._poller), ("file changes", self._disk_poller)):
             remaining = max(0, int((deadline - time.monotonic()) * 1000))
             if not poller.wait(remaining):
@@ -356,3 +378,16 @@ class Application(QObject):
     def handle_second_instance(self) -> None:
         """Another copy was launched: surface this one instead of starting again."""
         self._window.show_and_raise()
+
+    def threads_still_running(self) -> list[str]:
+        """What quit() saw outlive its waits, and any thread still running now.
+
+        Read by main() once the event loop has ended. The window is searched as
+        well as this object: it has no parent, and a first-run download runs
+        under a dialog that belongs to it.
+        """
+        names = list(self.unfinished_threads)
+        for name in running_threads(self, self._window):
+            if name not in names:
+                names.append(name)
+        return names

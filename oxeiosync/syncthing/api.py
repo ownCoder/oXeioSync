@@ -30,6 +30,14 @@ DEFAULT_TIMEOUT = 10.0
 #: cheap loopback request per poller in that time, next to the transfer
 #: sampler's one a second.
 EVENT_POLL_TIMEOUT = 3.0
+#: How long an event request may take to be answered, beyond its hold, before
+#: it counts as failed. Deliberately not tied to the hold: a poller that gives
+#: up re-baselines and loses every event in the gap, notifications with them,
+#: so a busy or briefly stalled engine keeps the minute it always had. Stopping
+#: does not rest on this — a poller is done within one hold whenever the engine
+#: answers, and a thread still stuck when quitting is left to main(), which
+#: skips the teardown that would crash on it.
+EVENT_READ_GRACE = 62.0
 
 
 class SyncthingApiError(Exception):
@@ -255,7 +263,7 @@ class SyncthingApi:
                 for k, v in {"since": since, "limit": limit, "timeout": int(timeout)}.items()
                 if v is not None
             },
-            timeout=timeout + DEFAULT_TIMEOUT,
+            timeout=timeout + EVENT_READ_GRACE,
         )
         if payload is None:
             return []

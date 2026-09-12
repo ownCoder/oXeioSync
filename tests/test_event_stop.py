@@ -10,6 +10,7 @@ it is asked to, as the real one does. No network needed.
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from oxeiosync import app
+from oxeiosync.syncthing import api
 from oxeiosync.syncthing.api import EVENT_POLL_TIMEOUT
 from oxeiosync.syncthing.events import EventPoller
 
@@ -26,16 +29,19 @@ SLACK = 1.5
 
 class _HoldingEngine(BaseHTTPRequestHandler):
     in_flight = threading.Event()
+    #: Set to answer every held request at once, so no poller outlives a test —
+    #: a QThread left running would abort the whole test run at exit.
+    release = threading.Event()
 
     def do_GET(self):  # noqa: N802
-        query = parse_qs(urlsplit(self.path).query)
-        hold = float(query.get("timeout", ["0"])[0])
-        if urlsplit(self.path).path == "/rest/system/status":
+        parts = urlsplit(self.path)
+        hold = float(parse_qs(parts.query).get("timeout", ["0"])[0])
+        if parts.path == "/rest/system/status":
             body = b'{"startTime": "run-1"}'
         else:
             if hold:
                 type(self).in_flight.set()
-            time.sleep(hold)  # nothing happens: the engine answers empty
+            type(self).release.wait(hold)  # nothing happens: the engine answers empty
             body = b"[]"
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -50,20 +56,30 @@ class _HoldingEngine(BaseHTTPRequestHandler):
 @pytest.fixture
 def engine_url():
     _HoldingEngine.in_flight = threading.Event()
+    _HoldingEngine.release = threading.Event()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HoldingEngine)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
+    _HoldingEngine.release.set()
     server.shutdown()
     server.server_close()
 
 
-def test_the_hold_is_short_enough_for_quit_to_wait_out():
-    """Quit's deadline is only useful if a poll that has just begun fits in it."""
-    from oxeiosync import app
+def test_quit_waits_long_enough_for_a_poll_that_has_just_begun():
+    """Tied to the code, not only to the constants: quit must use this deadline."""
+    assert app.POLLER_STOP_DEADLINE >= EVENT_POLL_TIMEOUT + SLACK
+    assert "POLLER_STOP_DEADLINE" in inspect.getsource(app.Application.quit)
 
-    assert EVENT_POLL_TIMEOUT + app.POLLER_STOP_MARGIN <= 10
-    assert app.POLLER_STOP_MARGIN >= SLACK
+
+def test_a_short_hold_does_not_shorten_how_long_an_answer_may_take():
+    """A poller that times out re-baselines and loses the events in the gap.
+
+    Tying the read timeout to the three-second hold cut it from 65 s to 13 s, and
+    a briefly stalled engine then cost the notifications a longer one rode out.
+    """
+    assert EVENT_POLL_TIMEOUT + api.EVENT_READ_GRACE >= 60
+    assert "EVENT_READ_GRACE" in inspect.getsource(api.SyncthingApi._events)
 
 
 @pytest.mark.parametrize("disk", [False, True], ids=["general feed", "file-change feed"])
@@ -79,8 +95,11 @@ def test_a_poller_stops_within_one_hold_of_being_told_to(engine_url, disk):
         stopped = poller.wait(int((EVENT_POLL_TIMEOUT + 5) * 1000))
         took = time.monotonic() - told
     finally:
+        # Whatever happened above, answer anything still held so the thread ends.
         poller.stop()
-        poller.wait(20_000)
+        _HoldingEngine.release.set()
+        ended = poller.wait(20_000)
 
+    assert ended, "the poller did not end even once its poll was answered"
     assert stopped
     assert took <= EVENT_POLL_TIMEOUT + SLACK, f"took {took:.2f}s to stop"

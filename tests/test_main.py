@@ -127,6 +127,74 @@ def test_a_thread_outliving_quit_skips_the_teardown_that_would_crash(leaving):
     assert leaving == [("logging.shutdown",), ("os._exit", 0)]
 
 
+def test_main_hands_leave_the_threads_still_running_after_the_lock_is_released(monkeypatch):
+    """The fallback only works if what quit found reaches _leave, in that order."""
+    seen = {}
+
+    class FakeApplication:
+        def __init__(self, qapp, start_minimized=False):
+            pass
+
+        def start(self):
+            pass
+
+        def threads_still_running(self):
+            return ["snapshot worker"]
+
+    class FakeQApplication:
+        def __init__(self, argv):
+            pass
+
+        def setApplicationName(self, name):  # noqa: N802
+            pass
+
+        def setApplicationVersion(self, version):  # noqa: N802
+            pass
+
+        def setOrganizationName(self, name):  # noqa: N802
+            pass
+
+        def exec(self):
+            return 0
+
+    class FakeLock:
+        def __init__(self, path):
+            pass
+
+        def acquire(self):
+            return True
+
+        def release(self):
+            seen["released"] = True
+
+    class FakeServer:
+        def close(self):
+            pass
+
+    class FakeTimer:
+        @staticmethod
+        def singleShot(*_args):  # noqa: N802
+            pass
+
+    def fake_leave(code, unfinished):
+        seen["leave"] = (code, unfinished, seen.get("released", False))
+        return code
+
+    monkeypatch.setattr(entry.paths, "ensure_dirs", lambda: None)
+    monkeypatch.setattr(entry, "setup_logging", lambda verbose: None)
+    monkeypatch.setattr(entry, "QApplication", FakeQApplication)
+    monkeypatch.setattr(entry, "apply_dark_theme", lambda qapp: None)
+    monkeypatch.setattr(entry, "_install_excepthook", lambda: None)
+    monkeypatch.setattr(entry, "InstanceLock", FakeLock)
+    monkeypatch.setattr(entry, "Application", FakeApplication)
+    monkeypatch.setattr(entry, "_listen_for_other_instances", lambda application: FakeServer())
+    monkeypatch.setattr(entry, "QTimer", FakeTimer)
+    monkeypatch.setattr(entry, "_leave", fake_leave)
+
+    assert entry.main([]) == 0
+    assert seen["leave"] == (0, ["snapshot worker"], True)
+
+
 def test_logging_writes_to_a_file(clean_root_logger, log_dir):
     entry.setup_logging(verbose=False)
     logging.getLogger("test").info("hello")

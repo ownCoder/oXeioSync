@@ -116,7 +116,11 @@ def download_syncthing_interactive(parent: QWidget | None = None) -> Path | None
 
     # The dialog can close before the thread has unwound; make sure it has.
     worker.cancel()
-    worker.wait(15_000)
+    if not worker.wait(15_000):
+        # Stuck in a lookup that cancelling cannot interrupt. It stays a child
+        # of the dialog, and so of the window, which is where quitting looks for
+        # threads still running before it lets the interpreter tear them down.
+        log.warning("The sync engine download did not stop in time")
 
     if "path" in result:
         return Path(result["path"])
